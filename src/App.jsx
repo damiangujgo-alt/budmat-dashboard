@@ -35,8 +35,8 @@ async function sbDelete(table, filter) {
   if (!r.ok) throw new Error(`DELETE ${table}: ${await r.text()}`);
 }
 
-async function sbUpsert(table, data) {
-  const r = await fetch(`${SB_URL}/rest/v1/${table}`, {
+async function sbUpsert(table, data, conflictCol = "sp") {
+  const r = await fetch(`${SB_URL}/rest/v1/${table}?on_conflict=${conflictCol}`, {
     method: "POST",
     headers: { ...sbHeaders, "Prefer": "resolution=merge-duplicates,return=minimal" },
     body: JSON.stringify(data),
