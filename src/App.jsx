@@ -308,6 +308,8 @@ export default function App() {
     } catch(err) { alert("Błąd: "+err.message); }
     setSavingRecords(false);
   }
+
+  async function saveMonthTotal(sp, newTotal) {
     if (!kpis) return;
     const dmsCount = kpis[sp].dmsOrders;
     if (newTotal < dmsCount) { alert(`Minimum to ${dmsCount} (liczba z DMS). Aby zmniejszyć — edytuj poszczególne zamówienia DMS.`); return; }
