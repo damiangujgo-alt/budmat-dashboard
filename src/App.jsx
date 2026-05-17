@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from "react";
 import * as XLSX from "xlsx";
+import { createClient } from "@supabase/supabase-js";
 
 // ─── SUPABASE ───────────────────────────────────────────────
 const SB_URL = "https://goizernbjfthejdekykz.supabase.co";
 const SB_KEY = "sb_publishable_QwxzW5eyomjU5WDtW6qERQ_Kaxxgx89";
 const ADMIN_PASS = "Budmat2026";
 const sbH = { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" };
+const supabase = createClient(SB_URL, SB_KEY);
 
 async function sbGet(t, qs = "") { const r = await fetch(`${SB_URL}/rest/v1/${t}?select=*${qs}`, { headers: sbH }); if (!r.ok) throw new Error(await r.text()); return r.json(); }
 async function sbPost(t, d) { const r = await fetch(`${SB_URL}/rest/v1/${t}`, { method: "POST", headers: { ...sbH, "Prefer": "return=minimal" }, body: JSON.stringify(d) }); if (!r.ok) throw new Error(await r.text()); }
@@ -246,6 +248,20 @@ export default function App() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("db-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "manual_orders" }, () => load())
+      .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, () => load())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [load]);
+
+  useEffect(() => {
+    const interval = setInterval(() => { load(); }, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [load]);
 
   function handleLogin(e) {
     e.preventDefault();
