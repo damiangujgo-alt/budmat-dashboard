@@ -232,11 +232,15 @@ export default function App() {
   const [editingTotalSP, setEditingTotalSP] = useState(null);
   const [editTotalVal, setEditTotalVal] = useState(0);
 
+  const [records, setRecords]       = useState([]);
+  const [editRecords, setEditRecords] = useState(null);
+  const [savingRecords, setSavingRecords] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true); setDbErr(null);
     try {
-      const [l,m,t] = await Promise.all([sbGet("leads"), sbGet("manual_orders"), sbGet("targets")]);
-      setLeads(l); setManual(m); setTargets(t);
+      const [l,m,t,r] = await Promise.all([sbGet("leads"), sbGet("manual_orders"), sbGet("targets"), sbGet("records")]);
+      setLeads(l); setManual(m); setTargets(t); setRecords(r);
     } catch(e) { setDbErr(e.message); }
     setLoading(false);
   }, []);
@@ -296,7 +300,14 @@ export default function App() {
     catch(err) { alert("Błąd: "+err.message); }
   }
 
-  async function saveMonthTotal(sp, newTotal) {
+  async function saveRecords() {
+    setSavingRecords(true);
+    try {
+      await Promise.all(SP.map(sp => sbUpsert("records",{ sp, best_count: editRecords[sp]?.count||0, best_month: editRecords[sp]?.month||"" })));
+      await load(); setEditRecords(null);
+    } catch(err) { alert("Błąd: "+err.message); }
+    setSavingRecords(false);
+  }
     if (!kpis) return;
     const dmsCount = kpis[sp].dmsOrders;
     if (newTotal < dmsCount) { alert(`Minimum to ${dmsCount} (liczba z DMS). Aby zmniejszyć — edytuj poszczególne zamówienia DMS.`); return; }
@@ -333,6 +344,7 @@ export default function App() {
   // DMS orders for admin (status 03 or 04/Sukces, any date)
   const dmsOrderLeads = leads.filter(isOrder).sort((a,b)=>(b.data_wprow||"").localeCompare(a.data_wprow||""));
   const tMap = Object.fromEntries(targets.map(t=>[t.sp,t.target]));
+  const rMap = Object.fromEntries(records.map(r=>[r.sp,{ count: r.best_count, month: r.best_month }]));
 
   // ══════════════════════════════════════════════════════════
   // LOGIN
@@ -426,6 +438,29 @@ export default function App() {
           <div style={{ display:"flex",gap:"8px",marginTop:"8px" }}>
             <button onClick={saveTargets} disabled={savingTargets||!editTargets} style={{ ...btnP,opacity:(!editTargets||savingTargets)?0.6:1 }}><i className="ti ti-device-floppy"/>{savingTargets?"Zapisuję...":"Zapisz plany"}</button>
             {editTargets&&<button onClick={()=>setEditTargets(null)} style={btnS}>Anuluj</button>}
+          </div>
+
+          {/* Records */}
+          <div style={{ marginTop:"24px",paddingTop:"20px",borderTop:"1px solid #e5e7eb" }}>
+            <p style={{ fontSize:"14px",fontWeight:"500",margin:"0 0 4px" }}>Rekordy wszech czasów</p>
+            <p style={{ fontSize:"12px",color:"#6b7280",margin:"0 0 16px" }}>Wpisz ręcznie — uwzględnia miesiące sprzed eksportu (np. styczeń–luty)</p>
+            {SP.map(sp=>{
+              const cur = rMap[sp]||{ count:0, month:"" };
+              const eVal = editRecords?.[sp];
+              return (
+                <div key={sp} style={{ display:"flex",alignItems:"center",gap:"12px",marginBottom:"14px" }}>
+                  <div style={{ width:"36px",height:"36px",borderRadius:"50%",background:SP_COLOR[sp]+"18",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"12px",fontWeight:"500",color:SP_COLOR[sp],flexShrink:0 }}>{SP_INIT[sp]}</div>
+                  <span style={{ flex:1,fontSize:"15px",fontWeight:"500" }}>{SP_LABEL[sp]}</span>
+                  <span style={{ fontSize:"13px",color:"#6b7280",minWidth:"150px" }}>Aktualnie: <strong>{cur.count} zam.</strong>{cur.month?` · ${cur.month}`:""}</span>
+                  <input type="number" min="0" placeholder="szt." value={eVal?.count??cur.count} onChange={e=>setEditRecords(p=>({...(p||{}), [sp]:{ count:+e.target.value, month:(p?.[sp]?.month??cur.month) }}))} style={{ ...inpM,width:"72px",textAlign:"center" }}/>
+                  <input type="text" placeholder="np. Styczeń 2025" value={eVal?.month??cur.month} onChange={e=>setEditRecords(p=>({...(p||{}), [sp]:{ count:(p?.[sp]?.count??cur.count), month:e.target.value }}))} style={{ ...inpM,width:"140px" }}/>
+                </div>
+              );
+            })}
+            <div style={{ display:"flex",gap:"8px",marginTop:"4px" }}>
+              <button onClick={saveRecords} disabled={savingRecords||!editRecords} style={{ ...btnP,opacity:(!editRecords||savingRecords)?0.6:1 }}><i className="ti ti-device-floppy"/>{savingRecords?"Zapisuję...":"Zapisz rekordy"}</button>
+              {editRecords&&<button onClick={()=>setEditRecords(null)} style={btnS}>Anuluj</button>}
+            </div>
           </div>
         </div>
       )}
@@ -618,22 +653,30 @@ export default function App() {
               const k=kpis[sp]; const g=game?.[sp]; const c=SP_COLOR[sp];
               const bc=planColor(k.planPct);
               const isChaser = k.rank===2;
+              const isLeader = k.rank===1;
+              const rec = rMap[sp]||{ count:0, month:"" };
+              const dispRecord = Math.max(rec.count, g?.pBest||0);
+              const dispRecordLabel = rec.count>=g?.pBest ? rec.month : g?.pBestLabel;
+              const nearRecord = dispRecord>0 && k.totalOrders>=dispRecord-1 && k.totalOrders<dispRecord;
+              const beatsRecord = dispRecord>0 && k.totalOrders>=dispRecord;
 
               return (
-                <div key={sp} style={{ background:"#fff",border:"1px solid #e5e7eb",borderRadius:"12px",padding:"18px",borderTop:`3px solid ${c}` }}>
+                <div key={sp} style={{ background: isLeader?"#fffbeb":"#fff", border:`1px solid ${isLeader?"#fbbf24":"#e5e7eb"}`, borderRadius:"12px", padding:"18px", borderTop:`3px solid ${isLeader?"#BA7517":c}` }}>
 
                   {/* Name + rank */}
                   <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"16px" }}>
                     <div style={{ display:"flex",alignItems:"center",gap:"10px" }}>
-                      <div style={{ width:"36px",height:"36px",borderRadius:"50%",background:c+"18",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"13px",fontWeight:"500",color:c,flexShrink:0 }}>{SP_INIT[sp]}</div>
+                      <div style={{ width:"36px",height:"36px",borderRadius:"50%",background:(isLeader?"#BA7517":c)+"22",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"13px",fontWeight:"500",color:isLeader?"#BA7517":c,flexShrink:0 }}>{SP_INIT[sp]}</div>
                       <p style={{ fontSize:"18px",fontWeight:"500",margin:0 }}>{SP_LABEL[sp]}</p>
                     </div>
-                    <span style={{ fontSize:"11px",fontWeight:"500",padding:"3px 9px",borderRadius:"20px",background:k.rank===1?"#FAEEDA":"#F1EFE8",color:k.rank===1?"#BA7517":"#5F5E5A" }}>#{k.rank}</span>
+                    <span style={{ fontSize:"11px",fontWeight:"600",padding:"4px 10px",borderRadius:"20px",background:isLeader?"#BA7517":"#F1EFE8",color:isLeader?"#fff":"#5F5E5A",display:"flex",alignItems:"center",gap:"4px" }}>
+                      {isLeader?"👑":""} {isLeader?"Lider salonu":"#2"}
+                    </span>
                   </div>
 
                   {/* Big number */}
                   <div style={{ display:"flex",alignItems:"flex-end",gap:"8px",marginBottom:"14px" }}>
-                    <span style={{ fontSize:"52px",fontWeight:"500",lineHeight:1,color:c }}>{k.totalOrders}</span>
+                    <span style={{ fontSize:"52px",fontWeight:"500",lineHeight:1,color:isLeader?"#BA7517":c }}>{k.totalOrders}</span>
                     <span style={{ fontSize:"13px",color:"#6b7280",paddingBottom:"7px",lineHeight:1.4 }}>/ {k.target}<br/>zamówień</span>
                   </div>
 
@@ -644,18 +687,18 @@ export default function App() {
                       <span style={{ fontSize:"12px",fontWeight:"500",color:bc }}>{k.planPct}%</span>
                     </div>
                     <div style={{ height:"5px",background:"#e5e7eb",borderRadius:"3px",overflow:"hidden" }}>
-                      <div style={{ height:"100%",width:`${Math.min(k.planPct,100)}%`,background:bc,borderRadius:"3px" }}/>
+                      <div style={{ height:"100%",width:`${Math.min(k.planPct,100)}%`,background:isLeader?"#BA7517":bc,borderRadius:"3px" }}/>
                     </div>
                   </div>
 
-                  {/* Stats row */}
+                  {/* Stats */}
                   <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px",marginBottom:"12px" }}>
-                    <div style={{ background:"#f9fafb",borderRadius:"8px",padding:"10px 6px",textAlign:"center" }}>
+                    <div style={{ background:isLeader?"#fef3c7":"#f9fafb",borderRadius:"8px",padding:"10px 6px",textAlign:"center" }}>
                       <p style={{ fontSize:"20px",fontWeight:"500",margin:"0 0 3px" }}>{k.convMon}%</p>
                       <p style={{ fontSize:"9px",color:"#6b7280",margin:0,textTransform:"uppercase",letterSpacing:"0.3px",lineHeight:1.4 }}>konwersja<br/>miesięczna</p>
                     </div>
                     <div onClick={k.pipeline>0?()=>{setPipelineSP(sp);setModal("pipeline");}:undefined}
-                      style={{ background:"#f9fafb",borderRadius:"8px",padding:"10px 6px",textAlign:"center",cursor:k.pipeline>0?"pointer":"default",border:k.pipeline>0?"1px solid #e5e7eb":"1px solid transparent" }}>
+                      style={{ background:isLeader?"#fef3c7":"#f9fafb",borderRadius:"8px",padding:"10px 6px",textAlign:"center",cursor:k.pipeline>0?"pointer":"default",border:k.pipeline>0?"1px solid #e5e7eb":"1px solid transparent" }}>
                       <p style={{ fontSize:"20px",fontWeight:"500",margin:"0 0 3px",color:k.pipeline>0?"#BA7517":"inherit" }}>{k.pipeline}</p>
                       <p style={{ fontSize:"9px",color:"#6b7280",margin:0,textTransform:"uppercase",letterSpacing:"0.3px",lineHeight:1.4 }}>pipeline{k.pipeline>0?" →":""}<br/>&nbsp;</p>
                     </div>
@@ -664,32 +707,35 @@ export default function App() {
                   {/* Streak + pace */}
                   {g&&(
                     <div style={{ display:"flex",gap:"8px",marginBottom:"10px",flexWrap:"wrap" }}>
-                      {g.streak>=2&&(
-                        <span style={{ fontSize:"11px",display:"flex",alignItems:"center",gap:"3px",color:"#ea580c",fontWeight:"500" }}>🔥 {g.streak} dni</span>
-                      )}
-                      {isCurMonth&&(
-                        <span style={{ fontSize:"11px",display:"flex",alignItems:"center",gap:"3px",color:g.isOnPace?"#059669":"#dc2626",fontWeight:"500" }}>
-                          {g.isOnPace?"▲":"▼"} {g.curPace.toFixed(1)}/dzień
-                        </span>
-                      )}
-                      {isCurMonth&&daysLeft>0&&g.needed>0&&(
-                        <span style={{ fontSize:"11px",color:"#6b7280" }}>{g.needed} do celu · {daysLeft} dni</span>
-                      )}
-                      {isCurMonth&&g.needed===0&&(
-                        <span style={{ fontSize:"11px",color:"#059669",fontWeight:"500" }}>✓ Cel osiągnięty!</span>
-                      )}
+                      {g.streak>=2&&<span style={{ fontSize:"11px",display:"flex",alignItems:"center",gap:"3px",color:"#ea580c",fontWeight:"500" }}>🔥 {g.streak} dni</span>}
+                      {isCurMonth&&<span style={{ fontSize:"11px",display:"flex",alignItems:"center",gap:"3px",color:g.isOnPace?"#059669":"#dc2626",fontWeight:"500" }}>{g.isOnPace?"▲":"▼"} {g.curPace.toFixed(1)}/dzień</span>}
+                      {isCurMonth&&daysLeft>0&&g.needed>0&&<span style={{ fontSize:"11px",color:"#6b7280" }}>{g.needed} do celu · {daysLeft} dni</span>}
+                      {isCurMonth&&g.needed===0&&<span style={{ fontSize:"11px",color:"#059669",fontWeight:"500" }}>✓ Cel osiągnięty!</span>}
                     </div>
                   )}
 
-                  {/* Personal best (for chaser) */}
-                  {g&&isChaser&&g.pBestLabel&&(
+                  {/* Record — leader */}
+                  {isLeader&&dispRecord>0&&(
+                    <div style={{ padding:"8px 12px",background:beatsRecord?"#d1fae5":nearRecord?"#fef3c7":"#fffbeb",border:`1px solid ${beatsRecord?"#6ee7b7":nearRecord?"#fbbf24":"#fde68a"}`,borderRadius:"8px",marginBottom:"10px",fontSize:"12px" }}>
+                      {beatsRecord
+                        ? <span style={{ color:"#065f46",fontWeight:"600" }}>🏆 NOWY REKORD SALONU! (poprzedni: {dispRecord} — {dispRecordLabel})</span>
+                        : nearRecord
+                          ? <span style={{ color:"#92400e",fontWeight:"500" }}>🎯 Jedno do rekordu! Rekord: {dispRecord} zam. — {dispRecordLabel}</span>
+                          : <span style={{ color:"#92400e" }}>👑 Rekord salonu: <strong>{dispRecord} zamówień</strong> — {dispRecordLabel}</span>
+                      }
+                    </div>
+                  )}
+
+                  {/* Personal best — chaser */}
+                  {isChaser&&dispRecord>0&&(
                     <div style={{ padding:"6px 10px",background:"#f0f9ff",borderRadius:"6px",marginBottom:"10px",fontSize:"11px",color:"#0369a1" }}>
-                      🏅 Twój rekord: <strong>{g.pBest} zamówień</strong> ({g.pBestLabel})
-                      {k.totalOrders>=g.pBest&&g.pBest>0&&<span style={{ color:"#059669",fontWeight:"500" }}> — bijesz go teraz!</span>}
+                      🏅 Twój rekord: <strong>{dispRecord} zamówień</strong>{dispRecordLabel?` — ${dispRecordLabel}`:""}
+                      {beatsRecord&&<span style={{ color:"#059669",fontWeight:"500" }}> — bijesz go teraz!</span>}
+                      {nearRecord&&<span style={{ color:"#ea580c",fontWeight:"500" }}> — jeszcze jedno!</span>}
                     </div>
                   )}
 
-                  {/* Weekly target (for chaser) */}
+                  {/* Weekly target chaser */}
                   {g&&isChaser&&(
                     <div style={{ padding:"6px 10px",background:"#fafafa",borderRadius:"6px",marginBottom:"10px",fontSize:"11px",color:"#374151",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
                       <span>Cel tygodniowy</span>
