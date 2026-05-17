@@ -228,6 +228,10 @@ export default function App() {
   const [editingCountId, setEditingCountId] = useState(null);
   const [editingCountVal, setEditingCountVal] = useState(1);
 
+  // Admin total editing
+  const [editingTotalSP, setEditingTotalSP] = useState(null);
+  const [editTotalVal, setEditTotalVal] = useState(0);
+
   const load = useCallback(async () => {
     setLoading(true); setDbErr(null);
     try {
@@ -290,6 +294,21 @@ export default function App() {
   async function saveLeadCount(id, val) {
     try { await sbPatch("leads",`id=eq.${id}`,{ count_override: Math.max(1,parseInt(val)||1) }); await load(); setEditingCountId(null); }
     catch(err) { alert("Błąd: "+err.message); }
+  }
+
+  async function saveMonthTotal(sp, newTotal) {
+    if (!kpis) return;
+    const dmsCount = kpis[sp].dmsOrders;
+    if (newTotal < dmsCount) { alert(`Minimum to ${dmsCount} (liczba z DMS). Aby zmniejszyć — edytuj poszczególne zamówienia DMS.`); return; }
+    const realManual = manual.filter(o => { const d=new Date(o.date); return o.sp===sp && d.getMonth()+1===selMonth && d.getFullYear()===selYear && o.model!=="__KOREKTA__"; });
+    const korektaNeeded = newTotal - dmsCount - realManual.length;
+    const existingKorekta = manual.filter(o => { const d=new Date(o.date); return o.sp===sp && d.getMonth()+1===selMonth && d.getFullYear()===selYear && o.model==="__KOREKTA__"; });
+    try {
+      for (const k of existingKorekta) await sbDelete("manual_orders",`id=eq.${k.id}`);
+      const dateStr = `${selYear}-${String(selMonth).padStart(2,"0")}-01`;
+      for (let i=0; i<korektaNeeded; i++) await sbPost("manual_orders",{ sp, model:"__KOREKTA__", client:"Korekta managera", date:dateStr });
+      await load(); setEditingTotalSP(null);
+    } catch(err) { alert("Błąd: "+err.message); }
   }
 
   // ── Computed ──
@@ -412,50 +431,69 @@ export default function App() {
       )}
 
       {/* ── ZAMÓWIENIA ── */}
-      {adminTab==="orders"&&(
-        <div style={{ display:"flex",flexDirection:"column",gap:"16px" }}>
-
-          {/* DMS orders */}
-          <div style={{ background:"#fff",border:"1px solid #e5e7eb",borderRadius:"12px",padding:"20px" }}>
-            <p style={{ fontSize:"14px",fontWeight:"500",margin:"0 0 4px" }}>Zamówienia z DMS</p>
-            <p style={{ fontSize:"12px",color:"#6b7280",margin:"0 0 14px" }}>Status 03 / 04 Sukces · edytuj liczbę gdy jeden lead = kilka aut</p>
-            {dmsOrderLeads.length===0?<p style={{ color:"#6b7280",fontSize:"14px" }}>Brak zamówień z DMS.</p>:dmsOrderLeads.map(r=>(
-              <div key={r.id} style={{ display:"flex",alignItems:"center",gap:"10px",padding:"8px 0",borderBottom:"1px solid #f3f4f6",fontSize:"13px" }}>
-                <span style={{ width:"8px",height:"8px",borderRadius:"50%",background:SP_COLOR[r.przypisany]||"#888",flexShrink:0 }}/>
-                <span style={{ minWidth:"52px",color:"#6b7280",flexShrink:0 }}>{SP_LABEL[r.przypisany]||r.przypisany}</span>
-                <span style={{ flex:2,fontWeight:"500",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{r.kontrahent||"—"}</span>
-                <span style={{ flex:2,color:"#6b7280",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{r.model||"—"}</span>
-                <span style={{ fontSize:"12px",color:"#9ca3af",whiteSpace:"nowrap",flexShrink:0 }}>{r.data_wprow||"—"}</span>
-                {editingCountId===r.id?(
-                  <div style={{ display:"flex",gap:"4px",alignItems:"center",flexShrink:0 }}>
-                    <input type="number" min="1" max="20" value={editingCountVal} onChange={e=>setEditingCountVal(e.target.value)} style={{ ...inpM,width:"56px",textAlign:"center",padding:"4px 6px" }} autoFocus/>
-                    <button onClick={()=>saveLeadCount(r.id,editingCountVal)} style={{ padding:"4px 10px",borderRadius:"6px",border:"none",background:"#185FA5",color:"#fff",cursor:"pointer",fontSize:"12px" }}>✓</button>
-                    <button onClick={()=>setEditingCountId(null)} style={{ padding:"4px 8px",borderRadius:"6px",border:"1px solid #d1d5db",background:"#fff",cursor:"pointer",fontSize:"12px" }}>✕</button>
+      {adminTab==="orders"&&kpis&&(
+        <div style={{ display:"flex",flexDirection:"column",gap:"12px" }}>
+          <p style={{ fontSize:"13px",color:"#6b7280",margin:"0 0 4px" }}>Bieżący miesiąc — {MONTHS[selMonth-1]} {selYear}</p>
+          {SP.map(sp=>{
+            const k = kpis[sp];
+            const spManual = manual.filter(o=>{ const d=new Date(o.date); return o.sp===sp && d.getMonth()+1===selMonth && d.getFullYear()===selYear && o.model!=="__KOREKTA__"; });
+            const spKorekta = manual.filter(o=>{ const d=new Date(o.date); return o.sp===sp && d.getMonth()+1===selMonth && d.getFullYear()===selYear && o.model==="__KOREKTA__"; });
+            const isEditing = editingTotalSP===sp;
+            return (
+              <div key={sp} style={{ background:"#fff",border:"1px solid #e5e7eb",borderRadius:"12px",padding:"20px",borderLeft:`4px solid ${SP_COLOR[sp]}` }}>
+                {/* Header */}
+                <div style={{ display:"flex",alignItems:"center",gap:"12px",marginBottom:"14px" }}>
+                  <div style={{ width:"36px",height:"36px",borderRadius:"50%",background:SP_COLOR[sp]+"18",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"13px",fontWeight:"500",color:SP_COLOR[sp],flexShrink:0 }}>{SP_INIT[sp]}</div>
+                  <div style={{ flex:1 }}>
+                    <p style={{ fontSize:"16px",fontWeight:"500",margin:"0 0 2px" }}>{SP_LABEL[sp]}</p>
+                    <p style={{ fontSize:"12px",color:"#6b7280",margin:0 }}>{k.dmsOrders} z DMS · {spManual.length} ręczne{spKorekta.length>0?` · ${spKorekta.length} korekta`:""}</p>
                   </div>
-                ):(
-                  <button onClick={()=>{setEditingCountId(r.id);setEditingCountVal(r.count_override||1);}} style={{ display:"flex",alignItems:"center",gap:"4px",padding:"4px 10px",borderRadius:"6px",border:"1px solid #d1d5db",background:r.count_override>1?"#dbeafe":"#fff",cursor:"pointer",fontSize:"12px",color:r.count_override>1?"#1e40af":"#374151",flexShrink:0 }}>
-                    <i className="ti ti-edit" style={{ fontSize:"12px" }}/> ×{r.count_override||1}
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
+                  {/* Total + edit */}
+                  {isEditing?(
+                    <div style={{ display:"flex",gap:"6px",alignItems:"center" }}>
+                      <input type="number" min={k.dmsOrders} value={editTotalVal} onChange={e=>setEditTotalVal(+e.target.value)} style={{ ...inpM,width:"72px",textAlign:"center",fontSize:"20px",fontWeight:"500",padding:"6px 8px" }} autoFocus/>
+                      <button onClick={()=>saveMonthTotal(sp,editTotalVal)} style={{ padding:"6px 12px",borderRadius:"8px",border:"none",background:"#185FA5",color:"#fff",cursor:"pointer",fontSize:"13px",fontWeight:"500" }}>Zapisz</button>
+                      <button onClick={()=>setEditingTotalSP(null)} style={{ padding:"6px 10px",borderRadius:"8px",border:"1px solid #d1d5db",background:"#fff",cursor:"pointer",fontSize:"13px" }}>✕</button>
+                    </div>
+                  ):(
+                    <div style={{ display:"flex",alignItems:"center",gap:"8px" }}>
+                      <span style={{ fontSize:"36px",fontWeight:"500",color:SP_COLOR[sp] }}>{k.totalOrders}</span>
+                      <button onClick={()=>{setEditingTotalSP(sp);setEditTotalVal(k.totalOrders);}} style={{ padding:"4px 10px",borderRadius:"6px",border:"1px solid #d1d5db",background:"#fff",cursor:"pointer",fontSize:"12px",color:"#374151",display:"flex",alignItems:"center",gap:"4px" }}>
+                        <i className="ti ti-edit" style={{ fontSize:"12px" }}/>Edytuj
+                      </button>
+                    </div>
+                  )}
+                </div>
 
-          {/* Manual orders */}
-          <div style={{ background:"#fff",border:"1px solid #e5e7eb",borderRadius:"12px",padding:"20px" }}>
-            <p style={{ fontSize:"14px",fontWeight:"500",margin:"0 0 4px" }}>Zamówienia ręczne</p>
-            <p style={{ fontSize:"12px",color:"#6b7280",margin:"0 0 14px" }}>Dodane przez handlowców · łącznie {manual.length}</p>
-            {manual.length===0?<p style={{ color:"#6b7280",fontSize:"14px" }}>Brak zamówień ręcznych.</p>:[...manual].reverse().map(o=>(
-              <div key={o.id} style={{ display:"flex",alignItems:"center",gap:"12px",padding:"8px 0",borderBottom:"1px solid #f3f4f6",fontSize:"13px" }}>
-                <span style={{ width:"8px",height:"8px",borderRadius:"50%",background:SP_COLOR[o.sp]||"#888",flexShrink:0 }}/>
-                <span style={{ minWidth:"52px",color:"#6b7280" }}>{SP_LABEL[o.sp]||o.sp}</span>
-                <span style={{ flex:2,fontWeight:"500",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{o.model}</span>
-                <span style={{ flex:2,color:"#6b7280",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{o.client}</span>
-                <span style={{ fontSize:"12px",color:"#9ca3af",whiteSpace:"nowrap" }}>{o.date}</span>
-                <button onClick={()=>deleteOrder(o.id)} style={{ background:"none",border:"none",cursor:"pointer",color:"#dc2626",padding:"2px 6px",flexShrink:0 }}><i className="ti ti-trash" style={{ fontSize:"14px" }}/></button>
+                {/* Manual orders list */}
+                {spManual.length>0&&(
+                  <div style={{ borderTop:"1px solid #f3f4f6",paddingTop:"10px",marginBottom:"10px" }}>
+                    {spManual.map(o=>(
+                      <div key={o.id} style={{ display:"flex",alignItems:"center",gap:"10px",padding:"5px 0",fontSize:"13px" }}>
+                        <span style={{ flex:2,fontWeight:"500",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{o.model}</span>
+                        <span style={{ flex:2,color:"#6b7280",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{o.client}</span>
+                        <span style={{ fontSize:"12px",color:"#9ca3af",whiteSpace:"nowrap" }}>{o.date}</span>
+                        <button onClick={()=>deleteOrder(o.id)} style={{ background:"none",border:"none",cursor:"pointer",color:"#dc2626",padding:"2px",flexShrink:0 }}><i className="ti ti-trash" style={{ fontSize:"14px" }}/></button>
+                      </div>
+                    ))}
+                    {spKorekta.length>0&&spKorekta.map(o=>(
+                      <div key={o.id} style={{ display:"flex",alignItems:"center",gap:"10px",padding:"5px 0",fontSize:"13px" }}>
+                        <span style={{ flex:2,color:"#6b7280",fontStyle:"italic" }}>Korekta managera</span>
+                        <span style={{ flex:2 }}/>
+                        <span style={{ fontSize:"12px",color:"#9ca3af",whiteSpace:"nowrap" }}>{o.date}</span>
+                        <button onClick={()=>deleteOrder(o.id)} style={{ background:"none",border:"none",cursor:"pointer",color:"#dc2626",padding:"2px",flexShrink:0 }}><i className="ti ti-trash" style={{ fontSize:"14px" }}/></button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Add button */}
+                <button onClick={()=>{setAddForm(f=>({...f,sp}));setModal("add");}} style={{ fontSize:"13px",color:"#185FA5",background:"none",border:"1px dashed #93c5fd",borderRadius:"6px",padding:"6px 12px",cursor:"pointer",width:"100%" }}>
+                  + Dodaj zamówienie ręczne
+                </button>
               </div>
-            ))}
-          </div>
+            );
+          })}
         </div>
       )}
     </div>
