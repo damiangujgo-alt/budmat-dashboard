@@ -214,7 +214,7 @@ export default function App() {
   const [modal, setModal] = useState(null);
   const [pipelineSP, setPipelineSP] = useState(null);
 
-  const [addForm, setAddForm] = useState({ sp: SP[0], count: 1 });
+  const [addForm, setAddForm] = useState({ sp: SP[0], count: 1, client: "" });
 
   // Admin upload
   const [xlsxName, setXlsxName] = useState(null);
@@ -343,9 +343,10 @@ export default function App() {
   async function addOrders() {
     const count = Math.max(1, parseInt(addForm.count)||1);
     const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
+    const client = addForm.client.trim() || "—";
     try {
-      for (let i=0; i<count; i++) await sbPost("manual_orders",{ sp: addForm.sp, model:"Zamówienie", client:"—", date: dateStr });
-      await load(); setModal(null); setAddForm(f=>({...f, count:1}));
+      for (let i=0; i<count; i++) await sbPost("manual_orders",{ sp: addForm.sp, model:"Zamówienie", client, date: dateStr });
+      await load(); setModal(null); setAddForm(f=>({...f, count:1, client:""}));
     } catch(err) { alert("Błąd: "+err.message); }
   }
   const kpis = leads.length>0 ? computeKPIs(leads,manual,targets,selMonth,selYear) : null;
@@ -632,44 +633,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Mini bars + gap */}
-            <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"12px" }}>
-              {ranked.map(sp=>{
-                const k=kpis[sp]; const c=SP_COLOR[sp];
-                return (
-                  <div key={sp} style={{ display:"flex",alignItems:"center",gap:"10px" }}>
-                    <div style={{ width:"28px",height:"28px",borderRadius:"50%",background:c+"18",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"11px",fontWeight:"500",color:c,flexShrink:0 }}>{SP_INIT[sp]}</div>
-                    <div style={{ flex:1,minWidth:0 }}>
-                      <div style={{ display:"flex",justifyContent:"space-between",marginBottom:"3px" }}>
-                        <span style={{ fontSize:"13px",fontWeight:"500" }}>{SP_LABEL[sp]}</span>
-                        <span style={{ fontSize:"13px",color:"#6b7280" }}>{k.totalOrders} / {k.target}</span>
-                      </div>
-                      <div style={{ height:"3px",background:"#e5e7eb",borderRadius:"2px",overflow:"hidden" }}>
-                        <div style={{ height:"100%",width:`${Math.min(k.planPct,100)}%`,background:c,borderRadius:"2px" }}/>
-                      </div>
-                    </div>
-                    <span style={{ fontSize:"12px",fontWeight:"500",color:c,minWidth:"34px",textAlign:"right" }}>{k.planPct}%</span>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Gap indicator */}
-            {gap>0&&leader&&chaser&&(
-              <div style={{ marginTop:"14px",padding:"10px 14px",background:"#f9fafb",borderRadius:"8px",display:"flex",alignItems:"center",gap:"8px" }}>
-                <span style={{ fontSize:"13px",color:"#111827" }}>
-                  <strong style={{ color:SP_COLOR[leader] }}>{SP_LABEL[leader]}</strong> prowadzi o <strong>{gap} {gap===1?"zamówienie":gap<5?"zamówienia":"zamówień"}</strong>
-                </span>
-                <span style={{ marginLeft:"auto",fontSize:"12px",color:"#6b7280" }}>
-                  {SP_LABEL[chaser]} potrzebuje {gap} do remisu
-                </span>
-              </div>
-            )}
-            {gap===0&&leader&&(
-              <div style={{ marginTop:"14px",padding:"10px 14px",background:"#dbeafe",borderRadius:"8px",textAlign:"center",fontSize:"13px",fontWeight:"500",color:"#1e40af" }}>
-                🤝 Remis na szczycie!
-              </div>
-            )}
           </div>
 
           {/* ── PERSON CARDS ── */}
@@ -813,6 +776,9 @@ export default function App() {
           </Field>
           <Field label="Liczba zamówień">
             <input type="number" min="1" max="20" value={addForm.count} onChange={e=>setAddForm({...addForm,count:+e.target.value})} style={{ ...inpM, fontSize:"24px", fontWeight:"500", textAlign:"center", padding:"12px" }} autoFocus/>
+          </Field>
+          <Field label="Klient (opcjonalnie)">
+            <input value={addForm.client} onChange={e=>setAddForm({...addForm,client:e.target.value})} placeholder="Nazwa firmy lub osoby" style={inpM}/>
           </Field>
           <div style={{ display:"flex",gap:"8px",marginTop:"20px" }}>
             <button onClick={addOrders} style={{ ...btnP,flex:1,justifyContent:"center" }}>Dodaj</button>
