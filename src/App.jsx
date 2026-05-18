@@ -214,7 +214,7 @@ export default function App() {
   const [modal, setModal] = useState(null);
   const [pipelineSP, setPipelineSP] = useState(null);
 
-  const [addForm, setAddForm] = useState({ sp:SP[0], model:"", client:"", date:`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}` });
+  const [addForm, setAddForm] = useState({ sp: SP[0], count: 1 });
 
   // Admin upload
   const [xlsxName, setXlsxName] = useState(null);
@@ -340,7 +340,14 @@ export default function App() {
     } catch(err) { alert("Błąd: "+err.message); }
   }
 
-  // ── Computed ──
+  async function addOrders() {
+    const count = Math.max(1, parseInt(addForm.count)||1);
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
+    try {
+      for (let i=0; i<count; i++) await sbPost("manual_orders",{ sp: addForm.sp, model:"Zamówienie", client:"—", date: dateStr });
+      await load(); setModal(null); setAddForm(f=>({...f, count:1}));
+    } catch(err) { alert("Błąd: "+err.message); }
+  }
   const kpis = leads.length>0 ? computeKPIs(leads,manual,targets,selMonth,selYear) : null;
   const game = kpis ? computeGame(leads,manual,kpis,selMonth,selYear) : null;
   const ranked = kpis ? [...SP].sort((a,b)=>kpis[a].rank-kpis[b].rank) : SP;
@@ -542,7 +549,7 @@ export default function App() {
 
                 {/* Add button */}
                 <button onClick={()=>{setAddForm(f=>({...f,sp}));setModal("add");}} style={{ fontSize:"13px",color:"#185FA5",background:"none",border:"1px dashed #93c5fd",borderRadius:"6px",padding:"6px 12px",cursor:"pointer",width:"100%" }}>
-                  + Dodaj zamówienie ręczne
+                  + Dodaj zamówienie
                 </button>
               </div>
             );
@@ -798,13 +805,17 @@ export default function App() {
 
       {/* MODAL: Add order */}
       {modal==="add"&&(
-        <Modal onClose={()=>setModal(null)} title="Dodaj zamówienie" subtitle="Zostanie zapisane w bazie natychmiast">
-          <Field label="Handlowiec"><select value={addForm.sp} onChange={e=>setAddForm({...addForm,sp:e.target.value})} style={inpM}>{SP.map(s=><option key={s} value={s}>{SP_LABEL[s]}</option>)}</select></Field>
-          <Field label="Model pojazdu"><input value={addForm.model} onChange={e=>setAddForm({...addForm,model:e.target.value})} placeholder="np. Ford Transit Custom" style={inpM}/></Field>
-          <Field label="Klient"><input value={addForm.client} onChange={e=>setAddForm({...addForm,client:e.target.value})} placeholder="Nazwa firmy lub osoby" style={inpM}/></Field>
-          <Field label="Data"><input type="date" value={addForm.date} onChange={e=>setAddForm({...addForm,date:e.target.value})} style={inpM}/></Field>
+        <Modal onClose={()=>setModal(null)} title="Dodaj zamówienie" maxWidth="320px">
+          <Field label="Handlowiec">
+            <select value={addForm.sp} onChange={e=>setAddForm({...addForm,sp:e.target.value})} style={inpM}>
+              {SP.map(s=><option key={s} value={s}>{SP_LABEL[s]}</option>)}
+            </select>
+          </Field>
+          <Field label="Liczba zamówień">
+            <input type="number" min="1" max="20" value={addForm.count} onChange={e=>setAddForm({...addForm,count:+e.target.value})} style={{ ...inpM, fontSize:"24px", fontWeight:"500", textAlign:"center", padding:"12px" }} autoFocus/>
+          </Field>
           <div style={{ display:"flex",gap:"8px",marginTop:"20px" }}>
-            <button onClick={addOrder} style={{ ...btnP,flex:1,justifyContent:"center" }}>Dodaj</button>
+            <button onClick={addOrders} style={{ ...btnP,flex:1,justifyContent:"center" }}>Dodaj</button>
             <button onClick={()=>setModal(null)} style={btnS}>Anuluj</button>
           </div>
         </Modal>
