@@ -365,7 +365,8 @@ export default function App() {
   const isCurMonth = selMonth===now.getMonth()+1&&selYear===now.getFullYear();
   const daysLeft = isCurMonth ? daysInMonth-now.getDate() : 0;
 
-  const manualThisMonth = manual.filter(o=>{ const d=new Date(o.date); return d.getMonth()+1===selMonth&&d.getFullYear()===selYear; });
+  const manualThisMonth = manual.filter(o=>{ const d=new Date(o.date); return d.getMonth()+1===selMonth&&d.getFullYear()===selYear&&o.sp!=="Inne"; });
+  const inneThisMonth = manual.filter(o=>{ const d=new Date(o.date); return d.getMonth()+1===selMonth&&d.getFullYear()===selYear&&o.sp==="Inne"; });
 
   // DMS orders for admin (status 03 or 04/Sukces, any date)
   const dmsOrderLeads = leads.filter(isOrder).sort((a,b)=>(b.data_wprow||"").localeCompare(a.data_wprow||""));
@@ -747,7 +748,7 @@ export default function App() {
             })}
           </div>
 
-          {/* Manual orders this month */}
+          {/* Manual orders */}
           {manualThisMonth.length>0&&(
             <div style={{ background:"#fff",border:"1px solid #e5e7eb",borderRadius:"12px",padding:"16px" }}>
               <p style={{ fontSize:"11px",fontWeight:"500",margin:"0 0 10px",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.3px" }}>Zamówienia dodane ręcznie</p>
@@ -755,8 +756,24 @@ export default function App() {
                 <div key={o.id} style={{ display:"flex",alignItems:"center",gap:"12px",padding:"7px 0",borderBottom:"1px solid #f3f4f6",fontSize:"13px" }}>
                   <span style={{ width:"8px",height:"8px",borderRadius:"50%",background:SP_COLOR[o.sp]||"#888",flexShrink:0 }}/>
                   <span style={{ minWidth:"52px",color:"#6b7280" }}>{SP_LABEL[o.sp]||o.sp}</span>
-                  <span style={{ flex:2,fontWeight:"500",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{o.model}</span>
                   <span style={{ flex:2,color:"#6b7280",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{o.client}</span>
+                  <span style={{ fontSize:"12px",color:"#9ca3af",whiteSpace:"nowrap" }}>{o.date}</span>
+                  <button onClick={()=>deleteOrder(o.id)} style={{ background:"none",border:"none",cursor:"pointer",color:"#6b7280",padding:"2px 4px",flexShrink:0 }}><i className="ti ti-trash" style={{ fontSize:"14px" }}/></button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Inne */}
+          {inneThisMonth.length>0&&(
+            <div style={{ background:"#fff",border:"1px solid #e5e7eb",borderRadius:"12px",padding:"16px",marginTop:"12px" }}>
+              <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"10px" }}>
+                <p style={{ fontSize:"11px",fontWeight:"500",margin:0,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.3px" }}>Inne</p>
+                <span style={{ fontSize:"20px",fontWeight:"500",color:"#374151" }}>{inneThisMonth.length}</span>
+              </div>
+              {inneThisMonth.map(o=>(
+                <div key={o.id} style={{ display:"flex",alignItems:"center",gap:"12px",padding:"7px 0",borderBottom:"1px solid #f3f4f6",fontSize:"13px" }}>
+                  <span style={{ flex:2,color:"#374151",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{o.client||"—"}</span>
                   <span style={{ fontSize:"12px",color:"#9ca3af",whiteSpace:"nowrap" }}>{o.date}</span>
                   <button onClick={()=>deleteOrder(o.id)} style={{ background:"none",border:"none",cursor:"pointer",color:"#6b7280",padding:"2px 4px",flexShrink:0 }}><i className="ti ti-trash" style={{ fontSize:"14px" }}/></button>
                 </div>
@@ -772,6 +789,7 @@ export default function App() {
           <Field label="Handlowiec">
             <select value={addForm.sp} onChange={e=>setAddForm({...addForm,sp:e.target.value})} style={inpM}>
               {SP.map(s=><option key={s} value={s}>{SP_LABEL[s]}</option>)}
+              <option value="Inne">Inne</option>
             </select>
           </Field>
           <Field label="Liczba zamówień">
