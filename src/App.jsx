@@ -357,7 +357,10 @@ export default function App() {
   const game = kpis ? computeGame(leads,manual,kpis,selMonth,selYear) : null;
   const ranked = kpis ? [...SP].sort((a,b)=>kpis[a].rank-kpis[b].rank) : SP;
 
-  const teamOrders  = kpis ? SP.reduce((s,sp)=>s+kpis[sp].totalOrders,0) : 0;
+  const manualThisMonth = manual.filter(o=>{ const d=new Date(o.date); return d.getMonth()+1===selMonth&&d.getFullYear()===selYear&&o.sp!=="Inne"&&!["__TOTAL_OVERRIDE__","__KOREKTA__"].includes(o.model); });
+  const inneThisMonth = manual.filter(o=>{ const d=new Date(o.date); return d.getMonth()+1===selMonth&&d.getFullYear()===selYear&&o.sp==="Inne"; });
+
+  const teamOrders  = kpis ? SP.reduce((s,sp)=>s+kpis[sp].totalOrders,0) + inneThisMonth.length : 0;
   const teamTarget  = kpis ? SP.reduce((s,sp)=>s+kpis[sp].target,0) : 0;
   const teamPlan    = teamTarget>0 ? Math.round(teamOrders/teamTarget*100) : 0;
   const teamPipeline = kpis ? SP.reduce((s,sp)=>s+kpis[sp].pipeline,0) : 0;
@@ -368,9 +371,6 @@ export default function App() {
   const daysInMonth = new Date(selYear,selMonth,0).getDate();
   const isCurMonth = selMonth===now.getMonth()+1&&selYear===now.getFullYear();
   const daysLeft = isCurMonth ? daysInMonth-now.getDate() : 0;
-
-  const manualThisMonth = manual.filter(o=>{ const d=new Date(o.date); return d.getMonth()+1===selMonth&&d.getFullYear()===selYear&&o.sp!=="Inne"; });
-  const inneThisMonth = manual.filter(o=>{ const d=new Date(o.date); return d.getMonth()+1===selMonth&&d.getFullYear()===selYear&&o.sp==="Inne"; });
 
   // DMS orders for admin (status 03 or 04/Sukces, any date)
   const dmsOrderLeads = leads.filter(isOrder).sort((a,b)=>(b.data_wprow||"").localeCompare(a.data_wprow||""));
