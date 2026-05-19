@@ -665,8 +665,23 @@ export default function App() {
 
                   {/* Big number */}
                   <div style={{ display:"flex",alignItems:"flex-end",gap:"8px",marginBottom:"14px" }}>
-                    <span style={{ fontSize:"52px",fontWeight:"500",lineHeight:1,color:isLeader?"#BA7517":c }}>{k.totalOrders}</span>
-                    <span style={{ fontSize:"13px",color:"#6b7280",paddingBottom:"7px",lineHeight:1.4 }}>/ {k.target}<br/>zamówień</span>
+                    {editingTotalSP===sp?(
+                      <div style={{ display:"flex",alignItems:"center",gap:"6px",flex:1 }}>
+                        <input type="number" min={k.dmsOrders} value={editTotalVal} onChange={e=>setEditTotalVal(+e.target.value)} style={{ ...inpM,width:"90px",fontSize:"32px",fontWeight:"500",textAlign:"center",padding:"6px 8px" }} autoFocus/>
+                        <div style={{ display:"flex",flexDirection:"column",gap:"4px" }}>
+                          <button onClick={()=>saveMonthTotal(sp,editTotalVal)} style={{ padding:"5px 12px",borderRadius:"6px",border:"none",background:"#185FA5",color:"#fff",cursor:"pointer",fontSize:"12px",fontWeight:"500" }}>✓</button>
+                          <button onClick={()=>setEditingTotalSP(null)} style={{ padding:"5px 12px",borderRadius:"6px",border:"1px solid #d1d5db",background:"#fff",cursor:"pointer",fontSize:"12px" }}>✕</button>
+                        </div>
+                      </div>
+                    ):(
+                      <>
+                        <span style={{ fontSize:"52px",fontWeight:"500",lineHeight:1,color:isLeader?"#BA7517":c }}>{k.totalOrders}</span>
+                        <span style={{ fontSize:"13px",color:"#6b7280",paddingBottom:"7px",lineHeight:1.4 }}>/ {k.target}<br/>zamówień</span>
+                        <button onClick={()=>{setEditingTotalSP(sp);setEditTotalVal(k.totalOrders);}} style={{ marginLeft:"auto",padding:"4px 8px",borderRadius:"6px",border:"1px solid #d1d5db",background:"transparent",cursor:"pointer",color:"#9ca3af",fontSize:"11px",display:"flex",alignItems:"center",gap:"3px",alignSelf:"center" }}>
+                          <i className="ti ti-edit" style={{ fontSize:"12px" }}/>
+                        </button>
+                      </>
+                    )}
                   </div>
 
                   {/* Progress */}
