@@ -53,17 +53,23 @@ function computeKPIs(leads, manual, targets, month, year) {
     const spLeads = leads.filter(r => r.przypisany === sp);
     const curLeads = spLeads.filter(r => { if (!r.data_wprow) return false; const d = new Date(r.data_wprow); return d.getMonth()+1 === month && d.getFullYear() === year; });
     const dmsOrders = curLeads.filter(isOrder).reduce((s,r) => s+(r.count_override||1), 0);
-    const manList = manual.filter(o => { const d = new Date(o.date); return o.sp===sp && d.getMonth()+1===month && d.getFullYear()===year; });
-    const totalOrders = dmsOrders + manList.length;
+
+    const allManCur = manual.filter(o => { const d=new Date(o.date); return o.sp===sp && d.getMonth()+1===month && d.getFullYear()===year; });
+    const overrideRec = allManCur.find(o => o.model==="__TOTAL_OVERRIDE__");
+    const manList = allManCur.filter(o => !["__TOTAL_OVERRIDE__","__KOREKTA__"].includes(o.model));
+    const effectiveDms = overrideRec ? Math.max(0, parseInt(overrideRec.client)||0) : dmsOrders;
+    const totalOrders = effectiveDms + manList.length;
     const convMon = curLeads.length > 0 ? Math.round(totalOrders/curLeads.length*100) : 0;
+
     const pipelineRows = spLeads.filter(r => {
       if (r.status !== "02. Wybór ofert" || !r.data_wprow) return false;
       const d = new Date(r.data_wprow); const dm = d.getMonth()+1, dy = d.getFullYear();
       for (let i=0; i<=2; i++) { let m=month-i, y=year; if (m<=0){m+=12;y--;} if (dm===m&&dy===y) return true; }
       return false;
     });
+
     const target = (targets.find(t => t.sp===sp)||{}).target||10;
-    out[sp] = { totalOrders, dmsOrders, manOrders: manList.length, curLeads: curLeads.length, pipeline: pipelineRows.length, pipelineRows, convMon, target, planPct: Math.round(totalOrders/target*100) };
+    out[sp] = { totalOrders, dmsOrders, effectiveDms, hasOverride: !!overrideRec, manOrders: manList.length, curLeads: curLeads.length, pipeline: pipelineRows.length, pipelineRows, convMon, target, planPct: Math.round(totalOrders/target*100) };
   }
   [...SP].sort((a,b) => out[b].totalOrders-out[a].totalOrders||out[b].convMon-out[a].convMon).forEach((sp,i) => out[sp].rank=i+1);
   return out;
@@ -326,16 +332,14 @@ export default function App() {
   }
 
   async function saveMonthTotal(sp, newTotal) {
-    if (!kpis) return;
-    const dmsCount = kpis[sp].dmsOrders;
-    if (newTotal < dmsCount) { alert(`Minimum to ${dmsCount} (liczba z DMS). Aby zmniejszyć — edytuj poszczególne zamówienia DMS.`); return; }
-    const realManual = manual.filter(o => { const d=new Date(o.date); return o.sp===sp && d.getMonth()+1===selMonth && d.getFullYear()===selYear && o.model!=="__KOREKTA__"; });
-    const korektaNeeded = newTotal - dmsCount - realManual.length;
-    const existingKorekta = manual.filter(o => { const d=new Date(o.date); return o.sp===sp && d.getMonth()+1===selMonth && d.getFullYear()===selYear && o.model==="__KOREKTA__"; });
+    const existing = manual.filter(o => {
+      const d=new Date(o.date);
+      return o.sp===sp && d.getMonth()+1===selMonth && d.getFullYear()===selYear && ["__TOTAL_OVERRIDE__","__KOREKTA__"].includes(o.model);
+    });
     try {
-      for (const k of existingKorekta) await sbDelete("manual_orders",`id=eq.${k.id}`);
+      for (const o of existing) await sbDelete("manual_orders",`id=eq.${o.id}`);
       const dateStr = `${selYear}-${String(selMonth).padStart(2,"0")}-01`;
-      for (let i=0; i<korektaNeeded; i++) await sbPost("manual_orders",{ sp, model:"__KOREKTA__", client:"Korekta managera", date:dateStr });
+      await sbPost("manual_orders",{ sp, model:"__TOTAL_OVERRIDE__", client: String(Math.max(0,newTotal)), date: dateStr });
       await load(); setEditingTotalSP(null);
     } catch(err) { alert("Błąd: "+err.message); }
   }
@@ -665,23 +669,11 @@ export default function App() {
 
                   {/* Big number */}
                   <div style={{ display:"flex",alignItems:"flex-end",gap:"8px",marginBottom:"14px" }}>
-                    {editingTotalSP===sp?(
-                      <div style={{ display:"flex",alignItems:"center",gap:"6px",flex:1 }}>
-                        <input type="number" min={k.dmsOrders} value={editTotalVal} onChange={e=>setEditTotalVal(+e.target.value)} style={{ ...inpM,width:"90px",fontSize:"32px",fontWeight:"500",textAlign:"center",padding:"6px 8px" }} autoFocus/>
-                        <div style={{ display:"flex",flexDirection:"column",gap:"4px" }}>
-                          <button onClick={()=>saveMonthTotal(sp,editTotalVal)} style={{ padding:"5px 12px",borderRadius:"6px",border:"none",background:"#185FA5",color:"#fff",cursor:"pointer",fontSize:"12px",fontWeight:"500" }}>✓</button>
-                          <button onClick={()=>setEditingTotalSP(null)} style={{ padding:"5px 12px",borderRadius:"6px",border:"1px solid #d1d5db",background:"#fff",cursor:"pointer",fontSize:"12px" }}>✕</button>
-                        </div>
-                      </div>
-                    ):(
-                      <>
-                        <span style={{ fontSize:"52px",fontWeight:"500",lineHeight:1,color:isLeader?"#BA7517":c }}>{k.totalOrders}</span>
-                        <span style={{ fontSize:"13px",color:"#6b7280",paddingBottom:"7px",lineHeight:1.4 }}>/ {k.target}<br/>zamówień</span>
-                        <button onClick={()=>{setEditingTotalSP(sp);setEditTotalVal(k.totalOrders);}} style={{ marginLeft:"auto",padding:"4px 8px",borderRadius:"6px",border:"1px solid #d1d5db",background:"transparent",cursor:"pointer",color:"#9ca3af",fontSize:"11px",display:"flex",alignItems:"center",gap:"3px",alignSelf:"center" }}>
-                          <i className="ti ti-edit" style={{ fontSize:"12px" }}/>
-                        </button>
-                      </>
-                    )}
+                    <span style={{ fontSize:"52px",fontWeight:"500",lineHeight:1,color:isLeader?"#BA7517":c }}>{k.totalOrders}</span>
+                    <div style={{ paddingBottom:"7px",lineHeight:1.4 }}>
+                      <span style={{ fontSize:"13px",color:"#6b7280" }}>/ {k.target}<br/>zamówień</span>
+                      {k.hasOverride&&<div style={{ fontSize:"10px",color:"#f59e0b",marginTop:"2px" }}>✏ DMS nadpisany ({k.dmsOrders}→{k.effectiveDms})</div>}
+                    </div>
                   </div>
 
                   {/* Progress */}
