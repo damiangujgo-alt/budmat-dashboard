@@ -205,11 +205,10 @@ export default function App() {
   const [selYear, setSelYear] = useState(now.getFullYear());
   const [addForm, setAddForm] = useState({sp: SP[0], count: 1, client: ""});
   const [pipelineSP, setPipelineSP] = useState(null);
-  const [achievements, setAchievements] = useState([]);
+  // Achievements disabled temporarily
+  const achievements = [];
+  const setAchievements = () => {};
   const [showAchievementsModal, setShowAchievementsModal] = useState(false);
-  const [adminPassword, setAdminPassword] = useState("");
-  const [adminAuthed, setAdminAuthed] = useState(false);
-  const [newAchievement, setNewAchievement] = useState({name: "", description: "", target: 10});
 
   useEffect(() => {
     const loadData = async () => {
@@ -249,30 +248,7 @@ export default function App() {
     } catch(err) { console.error(err); }
   };
 
-  const addAchievement = async () => {
-    if (!newAchievement.name.trim()) return alert("Nazwa wymagana");
-    if (newAchievement.target < 1) return alert("Target musi być > 0");
-    try {
-      await sbPost("achievements", {name: newAchievement.name, description: newAchievement.description, target: newAchievement.target, active: true});
-      setNewAchievement({name: "", description: "", target: 10});
-      loadData();
-    } catch(err) { console.error(err); alert("Błąd: " + err.message); }
-  };
 
-  const toggleAchievement = async (id, active) => {
-    try {
-      await sbPatch("achievements", `id=eq.${id}`, {active: !active});
-      loadData();
-    } catch(err) { console.error(err); }
-  };
-
-  const deleteAchievement = async (id) => {
-    if (!confirm("Usunąć?")) return;
-    try {
-      await sbDelete("achievements", `id=eq.${id}`);
-      loadData();
-    } catch(err) { console.error(err); }
-  };
 
   const manualThisMonth = manual.filter(o => { const d = new Date(o.date); return d.getMonth()+1 === selMonth && d.getFullYear() === selYear; });
   const inneThisMonth = leads.filter(r => r.status === "Inne" && r.data_wprow && new Date(r.data_wprow).getMonth()+1 === selMonth && new Date(r.data_wprow).getFullYear() === selYear);
@@ -291,41 +267,11 @@ export default function App() {
         </div>
         <div style={{ display:"flex", gap:"8px" }}>
           <button onClick={() => setModal("add")} style={btnP}>+ Dodaj</button>
-          <button onClick={() => setShowAchievementsModal(true)} style={{ ...btnP, background:"#7c3aed" }}>🎯 Cele</button>
           <button onClick={() => setModal("admin")} style={btnS}>⚙️</button>
         </div>
       </div>
 
-      {/* ACHIEVEMENTS SECTION */}
-      {achievements.length > 0 && (
-        <div style={{ background:"#fff", border:"1px solid #e5e7eb", borderRadius:"12px", padding:"16px", marginBottom:"20px" }}>
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(300px, 1fr))", gap:"16px" }}>
-            {achievements.map(ach => {
-              const prog = computeAchievementProgress(leads, manual, ach);
-              if (!prog) return null;
-              return (
-                <div key={ach.id} style={{ padding:"12px", background:prog.isCompleted?"#d1fae5":"#f9fafb", border:`1px solid ${prog.isCompleted?"#6ee7b7":"#e5e7eb"}`, borderRadius:"8px" }}>
-                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:"8px" }}>
-                    <div>
-                      <p style={{ margin:"0 0 2px", fontSize:"14px", fontWeight:"600", color:"#111827" }}>{ach.name}</p>
-                      {ach.description && <p style={{ margin:0, fontSize:"12px", color:"#6b7280" }}>{ach.description}</p>}
-                    </div>
-                    {prog.isCompleted && <span style={{ fontSize:"20px" }}>✓</span>}
-                  </div>
-                  {!prog.isCompleted && (
-                    <div style={{ marginBottom:"8px" }}>
-                      <div style={{ background:"#e5e7eb", height:"6px", borderRadius:"3px", overflow:"hidden" }}>
-                        <div style={{ background:"#7c3aed", height:"100%", width:`${prog.percentage}%`, transition:"width 0.3s" }}/>
-                      </div>
-                      <p style={{ margin:"6px 0 0", fontSize:"12px", color:"#6b7280", textAlign:"center" }}>{prog.progress} / {ach.target}</p>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {/* ACHIEVEMENTS SECTION - DISABLED TEMPORARILY */}
 
       {/* MAIN CONTENT */}
       {kpis && game && (
@@ -434,63 +380,7 @@ export default function App() {
         </Modal>
       )}
 
-      {/* MODAL: Achievements */}
-      {showAchievementsModal && (
-        <Modal onClose={() => setShowAchievementsModal(false)} title="🎯 Zarządzaj celami" maxWidth="480px">
-          {!adminAuthed ? (
-            <>
-              <Field label="Hasło admin">
-                <input type="password" value={adminPassword} onChange={e => setAdminPassword(e.target.value)} placeholder="Wpisz hasło" style={inpM} autoFocus/>
-              </Field>
-              <div style={{ display:"flex", gap:"8px" }}>
-                <button onClick={() => {
-                  if (adminPassword === ADMIN_PASS) { setAdminAuthed(true); setAdminPassword(""); } else alert("Błędne hasło");
-                }} style={{ ...btnP, flex:1, justifyContent:"center" }}>Zaloguj</button>
-                <button onClick={() => setShowAchievementsModal(false)} style={{ ...btnS, flex:1, justifyContent:"center" }}>Anuluj</button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div style={{ marginBottom:"16px", padding:"12px", background:"#f0f9ff", borderRadius:"8px", border:"1px solid #bfdbfe" }}>
-                <p style={{ margin:"0 0 8px", fontSize:"13px", fontWeight:"500", color:"#1e40af" }}>Nowy cel</p>
-                <Field label="Nazwa celu">
-                  <input value={newAchievement.name} onChange={e => setNewAchievement({...newAchievement, name: e.target.value})} placeholder="np. 30 zamówień" style={inpM}/>
-                </Field>
-                <Field label="Opis (opcjonalnie)">
-                  <input value={newAchievement.description} onChange={e => setNewAchievement({...newAchievement, description: e.target.value})} placeholder="np. Kebab dla całego zespołu!" style={inpM}/>
-                </Field>
-                <Field label="Liczba do osiągnięcia">
-                  <input type="number" min="1" value={newAchievement.target} onChange={e => setNewAchievement({...newAchievement, target: +e.target.value})} style={inpM}/>
-                </Field>
-                <button onClick={addAchievement} style={{ ...btnP, width:"100%", justifyContent:"center" }}>Dodaj cel</button>
-              </div>
-
-              <p style={{ fontSize:"12px", fontWeight:"500", color:"#6b7280", margin:"12px 0 8px", textTransform:"uppercase" }}>Aktywne cele</p>
-              {achievements.length === 0 ? (
-                <p style={{ fontSize:"13px", color:"#9ca3af", textAlign:"center", padding:"16px" }}>Brak aktywnych celów</p>
-              ) : (
-                achievements.map(ach => (
-                  <div key={ach.id} style={{ padding:"10px", background:"#f9fafb", borderRadius:"8px", marginBottom:"8px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                    <div style={{ flex:1 }}>
-                      <p style={{ margin:"0 0 2px", fontSize:"13px", fontWeight:"500", color:"#111827" }}>{ach.name}</p>
-                      {ach.description && <p style={{ margin:0, fontSize:"12px", color:"#6b7280" }}>{ach.description}</p>}
-                      <p style={{ margin:"2px 0 0", fontSize:"11px", color:"#9ca3af" }}>Target: {ach.target}</p>
-                    </div>
-                    <div style={{ display:"flex", gap:"6px", marginLeft:"12px" }}>
-                      <button onClick={() => toggleAchievement(ach.id, ach.active)} style={{ ...btnS, padding:"6px 10px", fontSize:"12px" }}>Wyłącz</button>
-                      <button onClick={() => deleteAchievement(ach.id)} style={{ ...btnS, padding:"6px 10px", fontSize:"12px", color:"#dc2626" }}>Usuń</button>
-                    </div>
-                  </div>
-                ))
-              )}
-
-              <div style={{ display:"flex", gap:"8px", marginTop:"16px", paddingTop:"12px", borderTop:"1px solid #e5e7eb" }}>
-                <button onClick={() => { setShowAchievementsModal(false); setAdminAuthed(false); }} style={{ ...btnS, flex:1, justifyContent:"center" }}>Zamknij</button>
-              </div>
-            </>
-          )}
-        </Modal>
-      )}
+      {/* MODAL: Achievements - DISABLED */}
     </div>
   );
 }
