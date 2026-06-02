@@ -211,21 +211,24 @@ export default function App() {
   const [adminAuthed, setAdminAuthed] = useState(false);
   const [newAchievement, setNewAchievement] = useState({name: "", description: "", target: 10});
 
-  const loadData = useCallback(async () => {
-    try {
-      const [l, m, t, a] = await Promise.all([sbGet("leads"), sbGet("manual_orders"), sbGet("targets"), sbGet("achievements")]);
-      setLeads(l);
-      setManual(m);
-      setTargets(t);
-      setAchievements(a.filter(x => x.active));
-      const k = computeKPIs(l, m, t, selMonth, selYear);
-      const g = computeGame(l, m, k, selMonth, selYear);
-      setKpis(k);
-      setGame(g);
-    } catch(err) { console.error(err); }
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const [l, m, t, a] = await Promise.all([sbGet("leads"), sbGet("manual_orders"), sbGet("targets"), sbGet("achievements")]);
+        setLeads(l);
+        setManual(m);
+        setTargets(t);
+        setAchievements(a.filter(x => x.active));
+        const k = computeKPIs(l, m, t, selMonth, selYear);
+        const g = computeGame(l, m, k, selMonth, selYear);
+        setKpis(k);
+        setGame(g);
+      } catch(err) { console.error(err); }
+    };
+    loadData();
+    const iv = setInterval(loadData, 5000);
+    return () => clearInterval(iv);
   }, [selMonth, selYear]);
-
-  useEffect(() => { loadData(); const iv = setInterval(loadData, 5000); return () => clearInterval(iv); }, [loadData]);
 
   const addOrders = async () => {
     if (addForm.count < 1) return alert("Liczba musi być > 0");
