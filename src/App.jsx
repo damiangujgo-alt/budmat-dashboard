@@ -244,12 +244,19 @@ export default function App() {
   const [editRecords, setEditRecords] = useState(null);
   const [savingRecords, setSavingRecords] = useState(false);
 
+  // Achievements (cele zespołu)
+  const [achievements, setAchievements] = useState([]);
+  const [newAch, setNewAch] = useState({ name:"", description:"", target:30 });
+  const [savingAch, setSavingAch] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true); setDbErr(null);
     try {
       const [l,m,t,r] = await Promise.all([sbGet("leads"), sbGet("manual_orders"), sbGet("targets"), sbGet("records")]);
       setLeads(l); setManual(m); setTargets(t); setRecords(r);
     } catch(e) { setDbErr(e.message); }
+    // Cele ładujemy osobno — gdyby tabeli brakowało, dashboard i tak działa
+    try { setAchievements(await sbGet("achievements")); } catch(e) { setAchievements([]); }
     setLoading(false);
   }, []);
 
@@ -260,6 +267,7 @@ export default function App() {
       .channel("db-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "manual_orders" }, () => load())
       .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, () => load())
+      .on("postgres_changes", { event: "*", schema: "public", table: "achievements" }, () => load())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [load]);
@@ -353,6 +361,34 @@ export default function App() {
       await load(); setModal(null); setAddForm(f=>({...f, count:1, client:""}));
     } catch(err) { alert("Błąd: "+err.message); }
   }
+
+  // ── Cele / Achievements ──
+  async function addAchievement() {
+    if (!newAch.name.trim()) return alert("Podaj nazwę celu");
+    const target = Math.max(1, parseInt(newAch.target)||1);
+    setSavingAch(true);
+    try {
+      await sbPost("achievements", { name: newAch.name.trim(), description: newAch.description.trim()||null, target, active: true });
+      await load(); setNewAch({ name:"", description:"", target:30 });
+    } catch(err) { alert("Błąd: "+err.message); }
+    setSavingAch(false);
+  }
+  async function toggleAchievement(id, active) {
+    try { await sbPatch("achievements",`id=eq.${id}`,{ active: !active }); await load(); }
+    catch(err) { alert("Błąd: "+err.message); }
+  }
+  async function deleteAchievement(id) {
+    try { await sbDelete("achievements",`id=eq.${id}`); await load(); }
+    catch(err) { alert("Błąd: "+err.message); }
+  }
+  // Postęp celu = realne zamówienia (DMS + ręczne) od dnia ustawienia celu, cały dział
+  function achProgress(ach) {
+    const since = (ach.created_at||"").slice(0,10);
+    let count = 0;
+    leads.forEach(r => { if (isOrder(r) && r.data_wprow && r.data_wprow >= since) count += (r.count_override||1); });
+    manual.forEach(o => { if (["__TOTAL_OVERRIDE__","__KOREKTA__"].includes(o.model)) return; if ((o.date||"") >= since) count += 1; });
+    return count;
+  }
   const kpis = leads.length>0 ? computeKPIs(leads,manual,targets,selMonth,selYear) : null;
   const game = kpis ? computeGame(leads,manual,kpis,selMonth,selYear) : null;
   const ranked = kpis ? [...SP].sort((a,b)=>kpis[a].rank-kpis[b].rank) : SP;
@@ -412,7 +448,7 @@ export default function App() {
 
       {/* Tabs */}
       <div style={{ display:"flex",gap:"2px",marginBottom:"16px",background:"#f3f4f6",padding:"4px",borderRadius:"8px" }}>
-        {[{id:"upload",icon:"ti-upload",label:"Export DMS"},{id:"targets",icon:"ti-target",label:"Plany"},{id:"orders",icon:"ti-clipboard-list",label:"Zamówienia"}].map(tab=>(
+        {[{id:"upload",icon:"ti-upload",label:"Export DMS"},{id:"targets",icon:"ti-target",label:"Plany"},{id:"orders",icon:"ti-clipboard-list",label:"Zamówienia"},{id:"cele",icon:"ti-trophy",label:"Cele"}].map(tab=>(
           <button key={tab.id} onClick={()=>setAdminTab(tab.id)} style={{ flex:1,padding:"8px",borderRadius:"6px",border:"none",cursor:"pointer",fontSize:"13px",fontWeight:adminTab===tab.id?"500":"400",background:adminTab===tab.id?"#fff":"transparent",color:adminTab===tab.id?"#111827":"#6b7280",display:"flex",alignItems:"center",justifyContent:"center",gap:"6px" }}>
             <i className={`ti ${tab.icon}`} style={{ fontSize:"14px" }}/>{tab.label}
           </button>
@@ -562,6 +598,61 @@ export default function App() {
           })}
         </div>
       )}
+
+      {/* ── CELE ── */}
+      {adminTab==="cele"&&(
+        <div style={{ background:"#fff",border:"1px solid #e5e7eb",borderRadius:"12px",padding:"20px" }}>
+          <p style={{ fontSize:"13px",color:"#6b7280",margin:"0 0 4px" }}>Cele zespołowe. Zliczają wszystkie zamówienia działu (DMS + ręczne) od dnia ustawienia celu — biegną przez kolejne miesiące, aż wyłączysz cel.</p>
+          <p style={{ fontSize:"12px",color:"#9ca3af",margin:"0 0 18px" }}>Aktywne cele pokazują się na dużym ekranie na górze dashboardu.</p>
+
+          {/* Nowy cel */}
+          <div style={{ background:"#f9fafb",border:"1px solid #e5e7eb",borderRadius:"10px",padding:"16px",marginBottom:"20px" }}>
+            <p style={{ fontSize:"13px",fontWeight:"500",margin:"0 0 12px",display:"flex",alignItems:"center",gap:"6px" }}><i className="ti ti-flag" style={{ fontSize:"15px",color:"#185FA5" }}/>Nowy cel</p>
+            <div style={{ display:"flex",gap:"10px",flexWrap:"wrap",alignItems:"flex-end" }}>
+              <div style={{ flex:2,minWidth:"160px" }}>
+                <p style={{ fontSize:"11px",color:"#6b7280",margin:"0 0 5px",textTransform:"uppercase",letterSpacing:"0.3px" }}>Nazwa</p>
+                <input value={newAch.name} onChange={e=>setNewAch(p=>({...p,name:e.target.value}))} placeholder="np. 🍗 30 zamówień = kebab dla działu" style={inpM}/>
+              </div>
+              <div style={{ width:"90px" }}>
+                <p style={{ fontSize:"11px",color:"#6b7280",margin:"0 0 5px",textTransform:"uppercase",letterSpacing:"0.3px" }}>Ile zam.</p>
+                <input type="number" min="1" value={newAch.target} onChange={e=>setNewAch(p=>({...p,target:e.target.value}))} style={{ ...inpM,textAlign:"center" }}/>
+              </div>
+            </div>
+            <div style={{ marginTop:"10px" }}>
+              <p style={{ fontSize:"11px",color:"#6b7280",margin:"0 0 5px",textTransform:"uppercase",letterSpacing:"0.3px" }}>Nagroda / opis (opcjonalnie)</p>
+              <input value={newAch.description} onChange={e=>setNewAch(p=>({...p,description:e.target.value}))} placeholder="np. Stawiam wszystkim kebaba!" style={inpM}/>
+            </div>
+            <button onClick={addAchievement} disabled={savingAch} style={{ ...btnP,marginTop:"14px",opacity:savingAch?0.6:1 }}><i className="ti ti-plus"/>{savingAch?"Dodaję...":"Dodaj cel"}</button>
+          </div>
+
+          {/* Lista celów */}
+          {achievements.length===0?(
+            <p style={{ fontSize:"13px",color:"#9ca3af",textAlign:"center",padding:"24px" }}>Brak celów. Dodaj pierwszy powyżej.</p>
+          ):(
+            achievements.slice().sort((a,b)=>(b.active-a.active)||((b.created_at||"").localeCompare(a.created_at||""))).map(ach=>{
+              const prog = achProgress(ach);
+              const done = prog>=ach.target;
+              const pct = Math.min(100,Math.round(prog/ach.target*100));
+              return (
+                <div key={ach.id} style={{ display:"flex",alignItems:"center",gap:"14px",padding:"14px 0",borderBottom:"1px solid #f3f4f6",opacity:ach.active?1:0.5 }}>
+                  <div style={{ flex:1,minWidth:0 }}>
+                    <p style={{ fontSize:"14px",fontWeight:"500",margin:"0 0 2px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{ach.name}{!ach.active&&<span style={{ fontSize:"11px",color:"#9ca3af",fontWeight:"400" }}> · wyłączony</span>}</p>
+                    {ach.description&&<p style={{ fontSize:"12px",color:"#6b7280",margin:"0 0 6px" }}>{ach.description}</p>}
+                    <div style={{ display:"flex",alignItems:"center",gap:"8px" }}>
+                      <div style={{ flex:1,maxWidth:"240px",height:"5px",background:"#e5e7eb",borderRadius:"3px",overflow:"hidden" }}>
+                        <div style={{ height:"100%",width:`${pct}%`,background:done?"#3B6D11":"#185FA5",borderRadius:"3px" }}/>
+                      </div>
+                      <span style={{ fontSize:"12px",fontWeight:"500",color:done?"#3B6D11":"#374151",whiteSpace:"nowrap" }}>{done?"✓ Osiągnięty!":`${prog} / ${ach.target}`}</span>
+                    </div>
+                  </div>
+                  <button onClick={()=>toggleAchievement(ach.id,ach.active)} style={{ ...btnS,padding:"6px 12px",fontSize:"13px",whiteSpace:"nowrap" }}>{ach.active?"Wyłącz":"Włącz"}</button>
+                  <button onClick={()=>deleteAchievement(ach.id)} style={{ background:"none",border:"none",cursor:"pointer",color:"#dc2626",padding:"4px",flexShrink:0 }}><i className="ti ti-trash" style={{ fontSize:"16px" }}/></button>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
     </div>
   );
 
@@ -607,6 +698,35 @@ export default function App() {
             <button onClick={()=>setPage("login")} style={btnP}>Przejdź do panelu admina</button>
           </div>
         ):(<>
+
+          {/* ── CELE / ACHIEVEMENTS ── */}
+          {achievements.filter(a=>a.active).length>0&&(
+            <div style={{ display:"flex",flexDirection:"column",gap:"10px",marginBottom:"14px" }}>
+              {achievements.filter(a=>a.active).map(ach=>{
+                const prog = achProgress(ach);
+                const done = prog>=ach.target;
+                const pct = Math.min(100,Math.round(prog/ach.target*100));
+                return (
+                  <div key={ach.id} style={{ background:done?"#ECFccb":"#fff", border:`1px solid ${done?"#84cc16":"#e5e7eb"}`, borderRadius:"12px", padding:"14px 20px", display:"flex", alignItems:"center", gap:"18px", borderLeft:`4px solid ${done?"#3B6D11":"#185FA5"}` }}>
+                    <div style={{ flex:1,minWidth:0,textAlign:"center" }}>
+                      <p style={{ fontSize:"17px",fontWeight:"600",margin:"0 0 3px",color:done?"#3B6D11":"#111827" }}>{ach.name}</p>
+                      {ach.description&&<p style={{ fontSize:"13px",color:done?"#3f6212":"#6b7280",margin:0 }}>{ach.description}</p>}
+                    </div>
+                    <div style={{ display:"flex",alignItems:"center",gap:"12px",flexShrink:0,minWidth:"280px" }}>
+                      {done?(
+                        <span style={{ fontSize:"18px",fontWeight:"700",color:"#3B6D11",whiteSpace:"nowrap" }}>✓ OSIĄGNIĘTE!</span>
+                      ):(<>
+                        <div style={{ flex:1,height:"8px",background:"#e5e7eb",borderRadius:"4px",overflow:"hidden",minWidth:"160px" }}>
+                          <div style={{ height:"100%",width:`${pct}%`,background:"#185FA5",borderRadius:"4px",transition:"width 0.4s" }}/>
+                        </div>
+                        <span style={{ fontSize:"22px",fontWeight:"600",color:"#185FA5",whiteSpace:"nowrap" }}>{prog}<span style={{ fontSize:"14px",color:"#6b7280",fontWeight:"400" }}> / {ach.target}</span></span>
+                      </>)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* ── TEAM SUMMARY ── */}
           <div style={{ background:"#fff",border:"1px solid #e5e7eb",borderRadius:"12px",padding:"20px",marginBottom:"14px" }}>
