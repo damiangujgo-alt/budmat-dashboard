@@ -169,6 +169,48 @@ function computeGame(leads, manual, kpis, month, year) {
   return stats;
 }
 
+// ─── XP / RANGI / ODZNAKI ───────────────────────────────────
+const XP_PER_ORDER = 10;
+const XP_PER_BADGE = 25;
+const XP_PER_BEST  = 50;
+
+// Rangi rosną kumulatywnie — próg to minimalne XP dla danej rangi
+const RANKS = [
+  { name:"Specjalista", min:0,    color:"#6b7280" },
+  { name:"Ekspert",     min:250,  color:"#185FA5" },
+  { name:"Mistrz",      min:750,  color:"#0F6E56" },
+  { name:"Wirtuoz",     min:1700, color:"#7c3aed" },
+  { name:"Legenda",     min:3200, color:"#BA7517" },
+];
+function rankForXp(xp) {
+  let idx = 0;
+  for (let i=0; i<RANKS.length; i++) if (xp >= RANKS[i].min) idx = i;
+  const cur = RANKS[idx];
+  const next = RANKS[idx+1] || null;
+  const span = next ? next.min - cur.min : 0;
+  const into = xp - cur.min;
+  const pct = next ? Math.min(100, Math.round(into/span*100)) : 100;
+  return { cur, next, pct, toNext: next ? next.min - xp : 0, idx };
+}
+
+// Definicje odznak. auto:true = sprawdzane z danych; auto:false = przyznaje manager ręcznie
+const BADGES = [
+  { key:"hot_streak",   emoji:"🔥", name:"Gorąca passa", desc:"5 zamówień w 7 dni",          auto:true  },
+  { key:"club_100",     emoji:"💯", name:"Klub Stu",     desc:"100 zamówień w karierze",     auto:true  },
+  { key:"target_met",   emoji:"✅", name:"Cel zdobyty",  desc:"Miesiąc zamknięty na ≥100% planu", auto:true },
+  { key:"go_electric",  emoji:"⚡", name:"Go Electric",  desc:"Pierwsze sprzedane BEV",      auto:false },
+  { key:"fleet_hunter", emoji:"🚐", name:"Łowca flot",   desc:"Domknięty kontrakt flotowy",  auto:false },
+];
+const BADGE_MAP = Object.fromEntries(BADGES.map(b=>[b.key,b]));
+
+// Suma XP i suma zamówień (kariera) z logu zdarzeń
+function xpSums(xpEvents) {
+  const xp = {}, orders = {};
+  for (const sp of SP) { xp[sp]=0; orders[sp]=0; }
+  xpEvents.forEach(e => { if (xp[e.sp]===undefined) { xp[e.sp]=0; orders[e.sp]=0; } xp[e.sp]+=(e.points||0); orders[e.sp]+=(e.orders||0); });
+  return { xp, orders };
+}
+
 // ─── STYLES ─────────────────────────────────────────────────
 const inpM = { width:"100%", padding:"8px 10px", borderRadius:"8px", border:"1px solid #d1d5db", background:"#fff", color:"#111827", fontSize:"14px", fontFamily:"inherit", boxSizing:"border-box" };
 const btnP = { padding:"10px 20px", borderRadius:"8px", border:"none", background:"#185FA5", color:"#fff", fontWeight:"500", cursor:"pointer", fontSize:"14px", display:"flex", alignItems:"center", gap:"6px" };
@@ -249,6 +291,13 @@ export default function App() {
   const [newAch, setNewAch] = useState({ name:"", description:"", target:30 });
   const [savingAch, setSavingAch] = useState(false);
 
+  // XP / rangi / odznaki
+  const [xpEvents, setXpEvents] = useState([]);
+  const [badgesAwarded, setBadgesAwarded] = useState([]);
+  const [manualXp, setManualXp] = useState({ sp: SP[0], points: 50, reason: "" });
+  const [xpBusy, setXpBusy] = useState(false);
+  const [xpMsg, setXpMsg] = useState(null);
+
   const load = useCallback(async () => {
     setLoading(true); setDbErr(null);
     try {
@@ -257,6 +306,9 @@ export default function App() {
     } catch(e) { setDbErr(e.message); }
     // Cele ładujemy osobno — gdyby tabeli brakowało, dashboard i tak działa
     try { setAchievements(await sbGet("achievements")); } catch(e) { setAchievements([]); }
+    // XP i odznaki też osobno — brak tabel nie wywala dashboardu
+    try { setXpEvents(await sbGet("xp_events")); } catch(e) { setXpEvents([]); }
+    try { setBadgesAwarded(await sbGet("badges")); } catch(e) { setBadgesAwarded([]); }
     setLoading(false);
   }, []);
 
@@ -268,6 +320,8 @@ export default function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "manual_orders" }, () => load())
       .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, () => load())
       .on("postgres_changes", { event: "*", schema: "public", table: "achievements" }, () => load())
+      .on("postgres_changes", { event: "*", schema: "public", table: "xp_events" }, () => load())
+      .on("postgres_changes", { event: "*", schema: "public", table: "badges" }, () => load())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [load]);
@@ -389,6 +443,105 @@ export default function App() {
     manual.forEach(o => { if (["__TOTAL_OVERRIDE__","__KOREKTA__"].includes(o.model)) return; if ((o.date||"") >= since) count += 1; });
     return count;
   }
+
+  // ── XP / RANGI / ODZNAKI ──
+  const { xp: xpTotals, orders: careerOrders } = xpSums(xpEvents);
+  const hasBadge = (sp, key) => badgesAwarded.some(b => b.sp===sp && b.badge_key===key);
+  const periodOf = (m,y) => `${y}-${String(m).padStart(2,"0")}`;
+  const isMonthCounted = (sp,m,y) => xpEvents.some(e => e.sp===sp && e.period===periodOf(m,y));
+
+  // Ile zamówień ma handlowiec w danym miesiącu (zgodnie z dashboardem: override/ręczne uwzględnione)
+  function ordersInMonth(sp, m, y) {
+    const k = leads.length>0 ? computeKPIs(leads,manual,targets,m,y) : null;
+    return k && k[sp] ? k[sp].totalOrders : 0;
+  }
+
+  // Przyznanie odznaki (+XP) jednorazowo
+  async function awardBadge(sp, key, silent=false) {
+    if (hasBadge(sp,key)) { if(!silent) alert("Ta odznaka jest już przyznana."); return false; }
+    const b = BADGE_MAP[key];
+    await sbPost("badges", { sp, badge_key: key });
+    await sbPost("xp_events", { sp, points: XP_PER_BADGE, orders: 0, reason: `Odznaka: ${b?b.name:key}`, period: null });
+    return true;
+  }
+
+  // Sprawdzenie odznak automatycznych na podstawie aktualnych danych
+  async function checkAutoBadges() {
+    let awarded = 0;
+    for (const sp of SP) {
+      // Klub Stu — 100 zamówień w karierze
+      if (!hasBadge(sp,"club_100") && careerOrders[sp] >= 100) { if(await awardBadge(sp,"club_100",true)) awarded++; }
+      // Cel zdobyty — którykolwiek miesiąc bieżącego roku zamknięty na >=100% planu
+      if (!hasBadge(sp,"target_met")) {
+        for (let m=1; m<=12; m++) {
+          const k = computeKPIs(leads,manual,targets,m,selYear);
+          if (k && k[sp] && k[sp].target>0 && k[sp].totalOrders>=k[sp].target && k[sp].totalOrders>0) { if(await awardBadge(sp,"target_met",true)) awarded++; break; }
+        }
+      }
+      // Gorąca passa — 5 zamówień w dowolnym oknie 7 dni
+      if (!hasBadge(sp,"hot_streak")) {
+        const dates = [];
+        leads.forEach(r => { if (r.przypisany===sp && isOrder(r) && r.data_wprow) for(let i=0;i<(r.count_override||1);i++) dates.push(r.data_wprow); });
+        manual.forEach(o => { if (o.sp===sp && !["__TOTAL_OVERRIDE__","__KOREKTA__"].includes(o.model) && o.date) dates.push(o.date); });
+        dates.sort();
+        let hit = false;
+        for (let i=0; i<dates.length && !hit; i++) {
+          const start = new Date(dates[i]); const end = new Date(start); end.setDate(start.getDate()+6);
+          const inWin = dates.filter(d => { const dd=new Date(d); return dd>=start && dd<=end; }).length;
+          if (inWin>=5) hit = true;
+        }
+        if (hit) { if(await awardBadge(sp,"hot_streak",true)) awarded++; }
+      }
+    }
+    return awarded;
+  }
+
+  // Naliczenie XP za zamówienia danego miesiąca (idempotentne — miesiąc oznaczany jako rozliczony)
+  async function settleMonth(m, y) {
+    setXpBusy(true); setXpMsg(null);
+    try {
+      let totalNew = 0, lines = [];
+      for (const sp of SP) {
+        if (isMonthCounted(sp,m,y)) continue;
+        const cnt = ordersInMonth(sp,m,y);
+        await sbPost("xp_events", { sp, points: cnt*XP_PER_ORDER, orders: cnt, reason: `Zamówienia ${MONTHS[m-1]} ${y}`, period: periodOf(m,y) });
+        if (cnt>0) lines.push(`${SP_LABEL[sp]}: +${cnt} zam. (+${cnt*XP_PER_ORDER} XP)`);
+        totalNew++;
+      }
+      await load();
+      const got = await checkAutoBadges();
+      await load();
+      setXpMsg({ ok:true, text: totalNew===0 ? `${MONTHS[m-1]} ${y} był już rozliczony.` : `Rozliczono ${MONTHS[m-1]} ${y}. ${lines.join(" · ")||"brak nowych zamówień"}${got?` · ${got} nowych odznak`:""}` });
+    } catch(err) { setXpMsg({ ok:false, text:"Błąd: "+err.message }); }
+    setXpBusy(false);
+  }
+
+  async function addManualXp() {
+    const pts = parseInt(manualXp.points)||0;
+    if (pts===0) return alert("Podaj liczbę XP (może być ujemna do korekty)");
+    setXpBusy(true); setXpMsg(null);
+    try {
+      await sbPost("xp_events", { sp: manualXp.sp, points: pts, orders: 0, reason: manualXp.reason.trim()||"Korekta ręczna", period: null });
+      await load(); setManualXp(p=>({ ...p, points:50, reason:"" }));
+      setXpMsg({ ok:true, text:`Dodano ${pts>0?"+":""}${pts} XP dla ${SP_LABEL[manualXp.sp]}` });
+    } catch(err) { setXpMsg({ ok:false, text:"Błąd: "+err.message }); }
+    setXpBusy(false);
+  }
+
+  async function manualAwardBadge(sp, key) {
+    setXpBusy(true); setXpMsg(null);
+    try { const ok = await awardBadge(sp,key); if(ok){ await load(); setXpMsg({ ok:true, text:`Przyznano odznakę ${BADGE_MAP[key]?.name} dla ${SP_LABEL[sp]}` }); } }
+    catch(err) { setXpMsg({ ok:false, text:"Błąd: "+err.message }); }
+    setXpBusy(false);
+  }
+
+  async function removeBadge(sp, key) {
+    setXpBusy(true);
+    try { await sbDelete("badges",`sp=eq.${encodeURIComponent(sp)}&badge_key=eq.${key}`); await load(); }
+    catch(err) { alert("Błąd: "+err.message); }
+    setXpBusy(false);
+  }
+
   const kpis = leads.length>0 ? computeKPIs(leads,manual,targets,selMonth,selYear) : null;
   const game = kpis ? computeGame(leads,manual,kpis,selMonth,selYear) : null;
   const ranked = kpis ? [...SP].sort((a,b)=>kpis[a].rank-kpis[b].rank) : SP;
@@ -448,7 +601,7 @@ export default function App() {
 
       {/* Tabs */}
       <div style={{ display:"flex",gap:"2px",marginBottom:"16px",background:"#f3f4f6",padding:"4px",borderRadius:"8px" }}>
-        {[{id:"upload",icon:"ti-upload",label:"Export DMS"},{id:"targets",icon:"ti-target",label:"Plany"},{id:"orders",icon:"ti-clipboard-list",label:"Zamówienia"},{id:"cele",icon:"ti-trophy",label:"Cele"}].map(tab=>(
+        {[{id:"upload",icon:"ti-upload",label:"Export DMS"},{id:"targets",icon:"ti-target",label:"Plany"},{id:"orders",icon:"ti-clipboard-list",label:"Zamówienia"},{id:"cele",icon:"ti-trophy",label:"Cele"},{id:"xp",icon:"ti-award",label:"XP"}].map(tab=>(
           <button key={tab.id} onClick={()=>setAdminTab(tab.id)} style={{ flex:1,padding:"8px",borderRadius:"6px",border:"none",cursor:"pointer",fontSize:"13px",fontWeight:adminTab===tab.id?"500":"400",background:adminTab===tab.id?"#fff":"transparent",color:adminTab===tab.id?"#111827":"#6b7280",display:"flex",alignItems:"center",justifyContent:"center",gap:"6px" }}>
             <i className={`ti ${tab.icon}`} style={{ fontSize:"14px" }}/>{tab.label}
           </button>
@@ -653,11 +806,105 @@ export default function App() {
           )}
         </div>
       )}
+
+      {/* ── XP ── */}
+      {adminTab==="xp"&&(
+        <div style={{ display:"flex",flexDirection:"column",gap:"16px" }}>
+
+          {/* Komunikat */}
+          {xpMsg&&<div style={{ padding:"10px 14px",borderRadius:"8px",background:xpMsg.ok?"#d1fae5":"#fee2e2",color:xpMsg.ok?"#065f46":"#991b1b",fontSize:"13px" }}>{xpMsg.ok?"✓":"⚠"} {xpMsg.text}</div>}
+
+          {/* Stan handlowców */}
+          <div style={{ background:"#fff",border:"1px solid #e5e7eb",borderRadius:"12px",padding:"20px" }}>
+            <p style={{ fontSize:"14px",fontWeight:"500",margin:"0 0 4px" }}>Stan XP i rang</p>
+            <p style={{ fontSize:"12px",color:"#6b7280",margin:"0 0 16px" }}>Zamówienie +{XP_PER_ORDER} XP · odznaka +{XP_PER_BADGE} XP. XP kumuluje się bez końca.</p>
+            {SP.map(sp=>{
+              const xp = xpTotals[sp]||0; const rk = rankForXp(xp);
+              return (
+                <div key={sp} style={{ display:"flex",alignItems:"center",gap:"14px",padding:"12px 0",borderBottom:"1px solid #f3f4f6" }}>
+                  <div style={{ width:"36px",height:"36px",borderRadius:"50%",background:SP_COLOR[sp]+"18",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"12px",fontWeight:"500",color:SP_COLOR[sp],flexShrink:0 }}>{SP_INIT[sp]}</div>
+                  <div style={{ flex:1,minWidth:0 }}>
+                    <p style={{ fontSize:"14px",fontWeight:"500",margin:"0 0 3px" }}>{SP_LABEL[sp]} · <span style={{ color:rk.cur.color }}>{rk.cur.name}</span></p>
+                    <div style={{ display:"flex",alignItems:"center",gap:"8px" }}>
+                      <div style={{ flex:1,maxWidth:"220px",height:"5px",background:"#e5e7eb",borderRadius:"3px",overflow:"hidden" }}>
+                        <div style={{ height:"100%",width:`${rk.pct}%`,background:rk.cur.color,borderRadius:"3px" }}/>
+                      </div>
+                      <span style={{ fontSize:"12px",color:"#6b7280",whiteSpace:"nowrap" }}>{xp} XP{rk.next?` · do ${rk.next.name}: ${rk.toNext}`:" · MAX"}</span>
+                    </div>
+                  </div>
+                  <span style={{ fontSize:"12px",color:"#9ca3af",whiteSpace:"nowrap" }}>{careerOrders[sp]||0} zam. w karierze</span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Naliczanie miesięczne */}
+          <div style={{ background:"#fff",border:"1px solid #e5e7eb",borderRadius:"12px",padding:"20px" }}>
+            <p style={{ fontSize:"14px",fontWeight:"500",margin:"0 0 4px" }}>Nalicz XP za zamówienia</p>
+            <p style={{ fontSize:"12px",color:"#6b7280",margin:"0 0 14px" }}>Zamienia zamówienia z danego miesiąca na XP (tak jak liczy je dashboard). Każdy miesiąc rozliczasz raz — ponowne kliknięcie nic nie dubluje. Przy okazji sprawdzane są odznaki automatyczne.</p>
+            <div style={{ display:"flex",gap:"10px",flexWrap:"wrap",alignItems:"center" }}>
+              <select value={selMonth} onChange={e=>setSelMonth(+e.target.value)} style={{ ...inpM,width:"auto" }}>
+                {MONTHS.map((m,i)=><option key={i} value={i+1}>{m} {selYear}</option>)}
+              </select>
+              <button onClick={()=>settleMonth(selMonth,selYear)} disabled={xpBusy} style={{ ...btnP,opacity:xpBusy?0.6:1 }}><i className="ti ti-calculator"/>{xpBusy?"Liczę...":`Nalicz ${MONTHS[selMonth-1]}`}</button>
+              <span style={{ fontSize:"12px",color:SP.every(sp=>isMonthCounted(sp,selMonth,selYear))?"#059669":"#9ca3af" }}>
+                {SP.every(sp=>isMonthCounted(sp,selMonth,selYear))?"✓ rozliczony":"nierozliczony"}
+              </span>
+            </div>
+            <button onClick={async()=>{ setXpBusy(true); const g=await checkAutoBadges(); await load(); setXpMsg({ ok:true, text:g?`Przyznano ${g} nowych odznak`:"Brak nowych odznak do przyznania" }); setXpBusy(false); }} disabled={xpBusy} style={{ ...btnS,marginTop:"12px",display:"flex",alignItems:"center",gap:"6px",width:"fit-content" }}><i className="ti ti-refresh"/>Sprawdź odznaki automatyczne</button>
+          </div>
+
+          {/* Ręczne XP */}
+          <div style={{ background:"#fff",border:"1px solid #e5e7eb",borderRadius:"12px",padding:"20px" }}>
+            <p style={{ fontSize:"14px",fontWeight:"500",margin:"0 0 4px" }}>Ręczne XP</p>
+            <p style={{ fontSize:"12px",color:"#6b7280",margin:"0 0 14px" }}>Dodaj XP za rzeczy spoza eksportu (flota, zabudowa, follow-up) albo korektę. Ujemna liczba odejmuje.</p>
+            <div style={{ display:"flex",gap:"10px",flexWrap:"wrap",alignItems:"flex-end" }}>
+              <div style={{ minWidth:"140px" }}>
+                <p style={{ fontSize:"11px",color:"#6b7280",margin:"0 0 5px",textTransform:"uppercase",letterSpacing:"0.3px" }}>Handlowiec</p>
+                <select value={manualXp.sp} onChange={e=>setManualXp(p=>({...p,sp:e.target.value}))} style={inpM}>{SP.map(s=><option key={s} value={s}>{SP_LABEL[s]}</option>)}</select>
+              </div>
+              <div style={{ width:"100px" }}>
+                <p style={{ fontSize:"11px",color:"#6b7280",margin:"0 0 5px",textTransform:"uppercase",letterSpacing:"0.3px" }}>XP</p>
+                <input type="number" value={manualXp.points} onChange={e=>setManualXp(p=>({...p,points:e.target.value}))} style={{ ...inpM,textAlign:"center" }}/>
+              </div>
+              <div style={{ flex:1,minWidth:"160px" }}>
+                <p style={{ fontSize:"11px",color:"#6b7280",margin:"0 0 5px",textTransform:"uppercase",letterSpacing:"0.3px" }}>Za co (opcjonalnie)</p>
+                <input value={manualXp.reason} onChange={e=>setManualXp(p=>({...p,reason:e.target.value}))} placeholder="np. duża zabudowa ITS" style={inpM}/>
+              </div>
+              <button onClick={addManualXp} disabled={xpBusy} style={{ ...btnP,opacity:xpBusy?0.6:1 }}><i className="ti ti-plus"/>Dodaj XP</button>
+            </div>
+          </div>
+
+          {/* Odznaki */}
+          <div style={{ background:"#fff",border:"1px solid #e5e7eb",borderRadius:"12px",padding:"20px" }}>
+            <p style={{ fontSize:"14px",fontWeight:"500",margin:"0 0 4px" }}>Odznaki</p>
+            <p style={{ fontSize:"12px",color:"#6b7280",margin:"0 0 14px" }}>Automatyczne nadają się same przy naliczaniu. Ręczne (⚡ Go Electric, 🚐 Łowca flot) przyznajesz sam. Każda odznaka to +{XP_PER_BADGE} XP.</p>
+            {SP.map(sp=>(
+              <div key={sp} style={{ marginBottom:"16px",paddingBottom:"14px",borderBottom:"1px solid #f3f4f6" }}>
+                <p style={{ fontSize:"13px",fontWeight:"500",margin:"0 0 8px" }}>{SP_LABEL[sp]}</p>
+                <div style={{ display:"flex",flexWrap:"wrap",gap:"8px" }}>
+                  {BADGES.map(b=>{
+                    const owned = hasBadge(sp,b.key);
+                    return (
+                      <div key={b.key} style={{ display:"flex",alignItems:"center",gap:"6px",padding:"6px 10px",borderRadius:"20px",border:`1px solid ${owned?"#fbbf24":"#e5e7eb"}`,background:owned?"#fffbeb":"#fff",fontSize:"12px" }}>
+                        <span style={{ opacity:owned?1:0.4 }}>{b.emoji} {b.name}</span>
+                        {owned
+                          ? <button onClick={()=>removeBadge(sp,b.key)} title="Cofnij" style={{ background:"none",border:"none",cursor:"pointer",color:"#9ca3af",padding:0,fontSize:"11px" }}>✕</button>
+                          : <button onClick={()=>manualAwardBadge(sp,b.key)} disabled={xpBusy} style={{ background:"none",border:"none",cursor:"pointer",color:"#185FA5",padding:0,fontSize:"11px",fontWeight:"500" }}>+ przyznaj</button>
+                        }
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            <p style={{ fontSize:"11px",color:"#9ca3af",margin:"4px 0 0" }}>Automatyczne: 🔥 Gorąca passa, 💯 Klub Stu, ✅ Cel zdobyty — możesz je też przyznać ręcznie, jeśli system jeszcze nie złapał warunku.</p>
+          </div>
+
+        </div>
+      )}
     </div>
   );
-
-  // ══════════════════════════════════════════════════════════
-  // DASHBOARD
   return (
     <div style={{ fontFamily:"inherit" }}>
       <div style={{ padding:"20px",maxWidth:"920px",margin:"0 auto" }}>
@@ -829,6 +1076,32 @@ export default function App() {
                       {isCurMonth&&g.needed===0&&<span style={{ fontSize:"11px",color:"#059669",fontWeight:"500" }}>✓ Cel osiągnięty!</span>}
                     </div>
                   )}
+
+                  {/* Ranga / XP / odznaki */}
+                  {(() => {
+                    const xp = xpTotals[sp]||0; const rk = rankForXp(xp);
+                    const myBadges = badgesAwarded.filter(b=>b.sp===sp);
+                    if (xp<=0 && myBadges.length===0) return null;
+                    return (
+                      <div style={{ marginTop:"12px",paddingTop:"12px",borderTop:"1px solid #f3f4f6" }}>
+                        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px" }}>
+                          <span style={{ fontSize:"13px",fontWeight:"600",color:rk.cur.color,display:"flex",alignItems:"center",gap:"5px" }}><i className="ti ti-award" style={{ fontSize:"15px" }}/>{rk.cur.name}</span>
+                          <span style={{ fontSize:"12px",color:"#6b7280" }}>{xp} XP</span>
+                        </div>
+                        <div style={{ height:"6px",background:"#e5e7eb",borderRadius:"3px",overflow:"hidden",marginBottom:"4px" }}>
+                          <div style={{ height:"100%",width:`${rk.pct}%`,background:rk.cur.color,borderRadius:"3px",transition:"width 0.4s" }}/>
+                        </div>
+                        <p style={{ fontSize:"10px",color:"#9ca3af",margin:"0 0 8px",textAlign:"right" }}>{rk.next?`do rangi ${rk.next.name}: ${rk.toNext} XP`:"Najwyższa ranga osiągnięta"}</p>
+                        {myBadges.length>0&&(
+                          <div style={{ display:"flex",flexWrap:"wrap",gap:"5px" }}>
+                            {myBadges.map(b=>{ const d=BADGE_MAP[b.badge_key]; return (
+                              <span key={b.badge_key} title={d?d.desc:""} style={{ fontSize:"11px",padding:"3px 8px",borderRadius:"12px",background:"#fffbeb",border:"1px solid #fde68a",color:"#92400e",whiteSpace:"nowrap" }}>{d?`${d.emoji} ${d.name}`:b.badge_key}</span>
+                            ); })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {/* Record — leader */}
                   {isLeader&&dispRecord>0&&(
