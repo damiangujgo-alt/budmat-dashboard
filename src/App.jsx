@@ -193,15 +193,22 @@ function rankForXp(xp) {
   return { cur, next, pct, toNext: next ? next.min - xp : 0, idx };
 }
 
-// Definicje odznak. auto:true = sprawdzane z danych; auto:false = przyznaje manager ręcznie
+// Definicje odznak.
+//  auto:true  = sprawdzane z danych | auto:false = przyznaje manager ręcznie
+//  repeat:true = można zdobyć wiele razy | milestone = jednorazowy próg kariery
+//  byMonth = auto, powtarzalny per miesiąc kalendarzowy
 const BADGES = [
-  { key:"hot_streak",   emoji:"🔥", name:"Gorąca passa", desc:"5 zamówień w 7 dni",          auto:true  },
-  { key:"club_100",     emoji:"💯", name:"Klub Stu",     desc:"100 zamówień w karierze",     auto:true  },
-  { key:"target_met",   emoji:"✅", name:"Cel zdobyty",  desc:"Miesiąc zamknięty na ≥100% planu", auto:true },
-  { key:"go_electric",  emoji:"⚡", name:"Go Electric",  desc:"Pierwsze sprzedane BEV",      auto:false },
-  { key:"fleet_hunter", emoji:"🚐", name:"Łowca flot",   desc:"Domknięty kontrakt flotowy",  auto:false },
+  { key:"hot_streak",   emoji:"🔥", name:"Gorąca passa", desc:"5 zamówień w 7 dni (raz na miesiąc)", xp:25,  auto:true,  repeat:true, byMonth:true },
+  { key:"target_met",   emoji:"✅", name:"Cel zdobyty",  desc:"Miesiąc ≥100% planu",                 xp:25,  auto:true,  repeat:true, byMonth:true },
+  { key:"go_electric",  emoji:"⚡", name:"Go Electric",  desc:"Sprzedane BEV",                       xp:25,  auto:false, repeat:true },
+  { key:"fleet_hunter", emoji:"🚐", name:"Łowca flot",   desc:"Domknięty kontrakt flotowy",          xp:25,  auto:false, repeat:true },
+  { key:"club_50",      emoji:"⭐", name:"Klub 50",      desc:"50 zamówień w karierze",              xp:50,  auto:true,  milestone:50  },
+  { key:"club_100",     emoji:"💯", name:"Klub 100",     desc:"100 zamówień w karierze",             xp:100, auto:true,  milestone:100 },
+  { key:"club_150",     emoji:"🏆", name:"Klub 150",     desc:"150 zamówień w karierze",             xp:150, auto:true,  milestone:150 },
 ];
 const BADGE_MAP = Object.fromEntries(BADGES.map(b=>[b.key,b]));
+// Powtarzalne odznaki mają klucz "base:tag" (tag = miesiąc lub znacznik czasu); milestone i pozostałe mają sam "base"
+const baseKeyOf = k => (k||"").split(":")[0];
 
 // Suma XP i suma zamówień (kariera) z logu zdarzeń
 function xpSums(xpEvents) {
@@ -446,9 +453,12 @@ export default function App() {
 
   // ── XP / RANGI / ODZNAKI ──
   const { xp: xpTotals, orders: careerOrders } = xpSums(xpEvents);
-  const hasBadge = (sp, key) => badgesAwarded.some(b => b.sp===sp && b.badge_key===key);
   const periodOf = (m,y) => `${y}-${String(m).padStart(2,"0")}`;
   const isMonthCounted = (sp,m,y) => xpEvents.some(e => e.sp===sp && e.period===periodOf(m,y));
+  // czy istnieje konkretna instancja odznaki (pełny klucz)
+  const hasInstance = (sp, fullKey) => badgesAwarded.some(b => b.sp===sp && b.badge_key===fullKey);
+  // ile razy zdobyto odznakę danego typu (po prefiksie bazowym)
+  const countBadge = (sp, baseKey) => badgesAwarded.filter(b => b.sp===sp && baseKeyOf(b.badge_key)===baseKey).length;
 
   // Ile zamówień ma handlowiec w danym miesiącu (zgodnie z dashboardem: override/ręczne uwzględnione)
   function ordersInMonth(sp, m, y) {
@@ -456,12 +466,12 @@ export default function App() {
     return k && k[sp] ? k[sp].totalOrders : 0;
   }
 
-  // Przyznanie odznaki (+XP) jednorazowo
-  async function awardBadge(sp, key, silent=false) {
-    if (hasBadge(sp,key)) { if(!silent) alert("Ta odznaka jest już przyznana."); return false; }
-    const b = BADGE_MAP[key];
-    await sbPost("badges", { sp, badge_key: key });
-    await sbPost("xp_events", { sp, points: XP_PER_BADGE, orders: 0, reason: `Odznaka: ${b?b.name:key}`, period: null });
+  // Zapis odznaki (+XP). fullKey rozróżnia instancje powtarzalne; baseKey wskazuje definicję
+  async function grantBadge(sp, fullKey, baseKey) {
+    if (hasInstance(sp, fullKey)) return false;
+    const b = BADGE_MAP[baseKey];
+    await sbPost("badges", { sp, badge_key: fullKey });
+    await sbPost("xp_events", { sp, points: (b?.xp ?? XP_PER_BADGE), orders: 0, reason: `Odznaka: ${b?b.name:baseKey}`, period: null });
     return true;
   }
 
@@ -469,28 +479,31 @@ export default function App() {
   async function checkAutoBadges() {
     let awarded = 0;
     for (const sp of SP) {
-      // Klub Stu — 100 zamówień w karierze
-      if (!hasBadge(sp,"club_100") && careerOrders[sp] >= 100) { if(await awardBadge(sp,"club_100",true)) awarded++; }
-      // Cel zdobyty — którykolwiek miesiąc bieżącego roku zamknięty na >=100% planu
-      if (!hasBadge(sp,"target_met")) {
-        for (let m=1; m<=12; m++) {
-          const k = computeKPIs(leads,manual,targets,m,selYear);
-          if (k && k[sp] && k[sp].target>0 && k[sp].totalOrders>=k[sp].target && k[sp].totalOrders>0) { if(await awardBadge(sp,"target_met",true)) awarded++; break; }
-        }
+      // Kluby kariery — jednorazowe progi
+      for (const b of BADGES.filter(x=>x.milestone)) {
+        if (careerOrders[sp] >= b.milestone && !hasInstance(sp, b.key)) { if(await grantBadge(sp, b.key, b.key)) awarded++; }
       }
-      // Gorąca passa — 5 zamówień w dowolnym oknie 7 dni
-      if (!hasBadge(sp,"hot_streak")) {
+      // Cel zdobyty — powtarzalny, osobno za każdy miesiąc bieżącego roku ≥100% planu
+      for (let m=1; m<=12; m++) {
+        const fullKey = `target_met:${periodOf(m,selYear)}`;
+        if (hasInstance(sp, fullKey)) continue;
+        const k = computeKPIs(leads,manual,targets,m,selYear);
+        if (k && k[sp] && k[sp].target>0 && k[sp].totalOrders>=k[sp].target && k[sp].totalOrders>0) { if(await grantBadge(sp, fullKey, "target_met")) awarded++; }
+      }
+      // Gorąca passa — powtarzalna, max raz na miesiąc: okno 7 dni z ≥5 zamówieniami w obrębie miesiąca
+      for (let m=1; m<=12; m++) {
+        const fullKey = `hot_streak:${periodOf(m,selYear)}`;
+        if (hasInstance(sp, fullKey)) continue;
         const dates = [];
-        leads.forEach(r => { if (r.przypisany===sp && isOrder(r) && r.data_wprow) for(let i=0;i<(r.count_override||1);i++) dates.push(r.data_wprow); });
-        manual.forEach(o => { if (o.sp===sp && !["__TOTAL_OVERRIDE__","__KOREKTA__"].includes(o.model) && o.date) dates.push(o.date); });
+        leads.forEach(r => { if (r.przypisany===sp && isOrder(r) && r.data_wprow) { const d=new Date(r.data_wprow); if(d.getMonth()+1===m && d.getFullYear()===selYear) for(let i=0;i<(r.count_override||1);i++) dates.push(r.data_wprow); } });
+        manual.forEach(o => { if (o.sp===sp && !["__TOTAL_OVERRIDE__","__KOREKTA__"].includes(o.model) && o.date) { const d=new Date(o.date); if(d.getMonth()+1===m && d.getFullYear()===selYear) dates.push(o.date); } });
         dates.sort();
         let hit = false;
         for (let i=0; i<dates.length && !hit; i++) {
           const start = new Date(dates[i]); const end = new Date(start); end.setDate(start.getDate()+6);
-          const inWin = dates.filter(d => { const dd=new Date(d); return dd>=start && dd<=end; }).length;
-          if (inWin>=5) hit = true;
+          if (dates.filter(d => { const dd=new Date(d); return dd>=start && dd<=end; }).length >= 5) hit = true;
         }
-        if (hit) { if(await awardBadge(sp,"hot_streak",true)) awarded++; }
+        if (hit) { if(await grantBadge(sp, fullKey, "hot_streak")) awarded++; }
       }
     }
     return awarded;
@@ -528,19 +541,36 @@ export default function App() {
     setXpBusy(false);
   }
 
-  async function manualAwardBadge(sp, key) {
+  // Ręczne przyznanie odznaki. Powtarzalne (Go Electric, Łowca flot) dodają kolejną instancję
+  async function manualAwardBadge(sp, baseKey) {
+    const b = BADGE_MAP[baseKey];
+    const fullKey = b?.repeat ? `${baseKey}:${Date.now()}` : baseKey;
     setXpBusy(true); setXpMsg(null);
-    try { const ok = await awardBadge(sp,key); if(ok){ await load(); setXpMsg({ ok:true, text:`Przyznano odznakę ${BADGE_MAP[key]?.name} dla ${SP_LABEL[sp]}` }); } }
+    try {
+      const ok = await grantBadge(sp, fullKey, baseKey);
+      if(ok){ await load(); setXpMsg({ ok:true, text:`Przyznano odznakę ${b?.name} dla ${SP_LABEL[sp]}` }); }
+      else { setXpMsg({ ok:false, text:"Ta odznaka jest już przyznana." }); }
+    }
     catch(err) { setXpMsg({ ok:false, text:"Błąd: "+err.message }); }
     setXpBusy(false);
   }
 
-  async function removeBadge(sp, key) {
+  // Cofnięcie ostatniej instancji danego typu odznaki (+ cofnięcie przyznanego za nią XP)
+  async function removeBadge(sp, baseKey) {
+    const mine = badgesAwarded.filter(b => b.sp===sp && baseKeyOf(b.badge_key)===baseKey);
+    if (mine.length===0) return;
+    const last = mine.sort((a,b)=>(b.awarded_at||"").localeCompare(a.awarded_at||""))[0];
+    const def = BADGE_MAP[baseKey];
     setXpBusy(true);
-    try { await sbDelete("badges",`sp=eq.${encodeURIComponent(sp)}&badge_key=eq.${key}`); await load(); }
+    try {
+      await sbDelete("badges",`id=eq.${last.id}`);
+      await sbPost("xp_events", { sp, points: -(def?.xp ?? XP_PER_BADGE), orders:0, reason:`Cofnięto odznakę: ${def?def.name:baseKey}`, period:null });
+      await load();
+    }
     catch(err) { alert("Błąd: "+err.message); }
     setXpBusy(false);
   }
+
 
   const kpis = leads.length>0 ? computeKPIs(leads,manual,targets,selMonth,selYear) : null;
   const game = kpis ? computeGame(leads,manual,kpis,selMonth,selYear) : null;
@@ -817,7 +847,7 @@ export default function App() {
           {/* Stan handlowców */}
           <div style={{ background:"#fff",border:"1px solid #e5e7eb",borderRadius:"12px",padding:"20px" }}>
             <p style={{ fontSize:"14px",fontWeight:"500",margin:"0 0 4px" }}>Stan XP i rang</p>
-            <p style={{ fontSize:"12px",color:"#6b7280",margin:"0 0 16px" }}>Zamówienie +{XP_PER_ORDER} XP · odznaka +{XP_PER_BADGE} XP. XP kumuluje się bez końca.</p>
+            <p style={{ fontSize:"12px",color:"#6b7280",margin:"0 0 16px" }}>Zamówienie +{XP_PER_ORDER} XP · odznaki od +25 do +150 XP. XP kumuluje się bez końca.</p>
             {SP.map(sp=>{
               const xp = xpTotals[sp]||0; const rk = rankForXp(xp);
               return (
@@ -878,27 +908,28 @@ export default function App() {
           {/* Odznaki */}
           <div style={{ background:"#fff",border:"1px solid #e5e7eb",borderRadius:"12px",padding:"20px" }}>
             <p style={{ fontSize:"14px",fontWeight:"500",margin:"0 0 4px" }}>Odznaki</p>
-            <p style={{ fontSize:"12px",color:"#6b7280",margin:"0 0 14px" }}>Automatyczne nadają się same przy naliczaniu. Ręczne (⚡ Go Electric, 🚐 Łowca flot) przyznajesz sam. Każda odznaka to +{XP_PER_BADGE} XP.</p>
+            <p style={{ fontSize:"12px",color:"#6b7280",margin:"0 0 14px" }}>Automatyczne (🔥 ✅ kluby) nadają się same przy naliczaniu. Ręczne (⚡ Go Electric, 🚐 Łowca flot) przyznajesz sam — i możesz wiele razy. Kluby kariery są jednorazowe.</p>
             {SP.map(sp=>(
               <div key={sp} style={{ marginBottom:"16px",paddingBottom:"14px",borderBottom:"1px solid #f3f4f6" }}>
                 <p style={{ fontSize:"13px",fontWeight:"500",margin:"0 0 8px" }}>{SP_LABEL[sp]}</p>
                 <div style={{ display:"flex",flexWrap:"wrap",gap:"8px" }}>
                   {BADGES.map(b=>{
-                    const owned = hasBadge(sp,b.key);
+                    const n = countBadge(sp,b.key);
+                    const owned = n>0;
+                    const canAdd = b.milestone ? !owned : true;        // milestone raz, reszta wielokrotnie
+                    const xpLabel = `+${b.xp} XP`;
                     return (
                       <div key={b.key} style={{ display:"flex",alignItems:"center",gap:"6px",padding:"6px 10px",borderRadius:"20px",border:`1px solid ${owned?"#fbbf24":"#e5e7eb"}`,background:owned?"#fffbeb":"#fff",fontSize:"12px" }}>
-                        <span style={{ opacity:owned?1:0.4 }}>{b.emoji} {b.name}</span>
-                        {owned
-                          ? <button onClick={()=>removeBadge(sp,b.key)} title="Cofnij" style={{ background:"none",border:"none",cursor:"pointer",color:"#9ca3af",padding:0,fontSize:"11px" }}>✕</button>
-                          : <button onClick={()=>manualAwardBadge(sp,b.key)} disabled={xpBusy} style={{ background:"none",border:"none",cursor:"pointer",color:"#185FA5",padding:0,fontSize:"11px",fontWeight:"500" }}>+ przyznaj</button>
-                        }
+                        <span style={{ opacity:owned?1:0.45 }}>{b.emoji} {b.name}{n>1?` ×${n}`:""} <span style={{ color:"#9ca3af" }}>({xpLabel})</span></span>
+                        {owned&&<button onClick={()=>removeBadge(sp,b.key)} title="Cofnij ostatnią" style={{ background:"none",border:"none",cursor:"pointer",color:"#9ca3af",padding:0,fontSize:"11px" }}>✕</button>}
+                        {canAdd&&<button onClick={()=>manualAwardBadge(sp,b.key)} disabled={xpBusy} style={{ background:"none",border:"none",cursor:"pointer",color:"#185FA5",padding:0,fontSize:"11px",fontWeight:"500" }}>+ przyznaj</button>}
                       </div>
                     );
                   })}
                 </div>
               </div>
             ))}
-            <p style={{ fontSize:"11px",color:"#9ca3af",margin:"4px 0 0" }}>Automatyczne: 🔥 Gorąca passa, 💯 Klub Stu, ✅ Cel zdobyty — możesz je też przyznać ręcznie, jeśli system jeszcze nie złapał warunku.</p>
+            <p style={{ fontSize:"11px",color:"#9ca3af",margin:"4px 0 0" }}>🔥 Gorąca passa i ✅ Cel zdobyty nadają się automatycznie raz na miesiąc — można je też przyznać ręcznie, jeśli system jeszcze nie złapał warunku.</p>
           </div>
 
         </div>
@@ -1082,20 +1113,25 @@ export default function App() {
                     const xp = xpTotals[sp]||0; const rk = rankForXp(xp);
                     const myBadges = badgesAwarded.filter(b=>b.sp===sp);
                     if (xp<=0 && myBadges.length===0) return null;
+                    // grupowanie odznak po typie bazowym, z licznikiem powtórzeń
+                    const grouped = {};
+                    myBadges.forEach(b=>{ const base=baseKeyOf(b.badge_key); grouped[base]=(grouped[base]||0)+1; });
+                    const order = BADGES.map(b=>b.key);
+                    const groupedKeys = Object.keys(grouped).sort((a,b)=>order.indexOf(a)-order.indexOf(b));
                     return (
-                      <div style={{ marginTop:"12px",paddingTop:"12px",borderTop:"1px solid #f3f4f6" }}>
-                        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px" }}>
-                          <span style={{ fontSize:"13px",fontWeight:"600",color:rk.cur.color,display:"flex",alignItems:"center",gap:"5px" }}><i className="ti ti-award" style={{ fontSize:"15px" }}/>{rk.cur.name}</span>
-                          <span style={{ fontSize:"12px",color:"#6b7280" }}>{xp} XP</span>
+                      <div style={{ marginTop:"14px",paddingTop:"14px",borderTop:"2px solid #f3f4f6" }}>
+                        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:"8px" }}>
+                          <span style={{ fontSize:"19px",fontWeight:"700",color:rk.cur.color,display:"flex",alignItems:"center",gap:"7px",letterSpacing:"0.2px" }}><i className="ti ti-award" style={{ fontSize:"22px" }}/>{rk.cur.name}</span>
+                          <span style={{ fontSize:"17px",fontWeight:"700",color:rk.cur.color }}>{xp}<span style={{ fontSize:"12px",color:"#9ca3af",fontWeight:"400" }}> XP</span></span>
                         </div>
-                        <div style={{ height:"6px",background:"#e5e7eb",borderRadius:"3px",overflow:"hidden",marginBottom:"4px" }}>
-                          <div style={{ height:"100%",width:`${rk.pct}%`,background:rk.cur.color,borderRadius:"3px",transition:"width 0.4s" }}/>
+                        <div style={{ height:"12px",background:"#eef0f2",borderRadius:"6px",overflow:"hidden",marginBottom:"5px",border:"1px solid #e5e7eb" }}>
+                          <div style={{ height:"100%",width:`${rk.pct}%`,background:`linear-gradient(90deg, ${rk.cur.color}cc, ${rk.cur.color})`,borderRadius:"6px",transition:"width 0.5s" }}/>
                         </div>
-                        <p style={{ fontSize:"10px",color:"#9ca3af",margin:"0 0 8px",textAlign:"right" }}>{rk.next?`do rangi ${rk.next.name}: ${rk.toNext} XP`:"Najwyższa ranga osiągnięta"}</p>
-                        {myBadges.length>0&&(
-                          <div style={{ display:"flex",flexWrap:"wrap",gap:"5px" }}>
-                            {myBadges.map(b=>{ const d=BADGE_MAP[b.badge_key]; return (
-                              <span key={b.badge_key} title={d?d.desc:""} style={{ fontSize:"11px",padding:"3px 8px",borderRadius:"12px",background:"#fffbeb",border:"1px solid #fde68a",color:"#92400e",whiteSpace:"nowrap" }}>{d?`${d.emoji} ${d.name}`:b.badge_key}</span>
+                        <p style={{ fontSize:"11px",color:"#9ca3af",margin:"0 0 10px",textAlign:"right" }}>{rk.next?`do rangi ${rk.next.name}: ${rk.toNext} XP`:"🏆 Najwyższa ranga osiągnięta"}</p>
+                        {groupedKeys.length>0&&(
+                          <div style={{ display:"flex",flexWrap:"wrap",gap:"6px" }}>
+                            {groupedKeys.map(base=>{ const d=BADGE_MAP[base]; const n=grouped[base]; return (
+                              <span key={base} title={d?d.desc:""} style={{ fontSize:"12px",fontWeight:"500",padding:"4px 10px",borderRadius:"14px",background:"#fffbeb",border:"1px solid #fde68a",color:"#92400e",whiteSpace:"nowrap" }}>{d?`${d.emoji} ${d.name}`:base}{n>1?` ×${n}`:""}</span>
                             ); })}
                           </div>
                         )}
@@ -1180,6 +1216,30 @@ export default function App() {
               ))}
             </div>
           )}
+
+          {/* ── LEGENDA: rangi i odznaki ── */}
+          <div style={{ background:"#fff",border:"1px solid #e5e7eb",borderRadius:"12px",padding:"14px 18px",marginTop:"14px" }}>
+            <div style={{ display:"flex",flexWrap:"wrap",gap:"24px" }}>
+              <div style={{ flex:1,minWidth:"240px" }}>
+                <p style={{ fontSize:"10px",color:"#9ca3af",margin:"0 0 8px",textTransform:"uppercase",letterSpacing:"0.4px" }}>Rangi (XP)</p>
+                <div style={{ display:"flex",flexWrap:"wrap",gap:"6px" }}>
+                  {RANKS.map((r,i)=>(
+                    <span key={r.name} style={{ fontSize:"11px",color:r.color,fontWeight:"500",whiteSpace:"nowrap" }}>
+                      {r.name} <span style={{ color:"#9ca3af",fontWeight:"400" }}>{r.min}{i<RANKS.length-1?"":"+"}</span>{i<RANKS.length-1?<span style={{ color:"#d1d5db",margin:"0 2px" }}>·</span>:null}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div style={{ flex:1.4,minWidth:"260px" }}>
+                <p style={{ fontSize:"10px",color:"#9ca3af",margin:"0 0 8px",textTransform:"uppercase",letterSpacing:"0.4px" }}>Odznaki</p>
+                <div style={{ display:"flex",flexWrap:"wrap",gap:"6px 14px" }}>
+                  {BADGES.map(b=>(
+                    <span key={b.key} style={{ fontSize:"11px",color:"#6b7280",whiteSpace:"nowrap" }}>{b.emoji} <strong style={{ color:"#374151",fontWeight:"500" }}>{b.name}</strong> — {b.desc} <span style={{ color:"#9ca3af" }}>(+{b.xp})</span></span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
         </>)}
       </div>
 
